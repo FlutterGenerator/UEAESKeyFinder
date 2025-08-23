@@ -2,11 +2,7 @@ name: Build UEAESKeyFinder
 
 on:
   push:
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
@@ -30,7 +26,7 @@ jobs:
       run: dotnet build UEAESKeyFinder.sln --configuration Release --no-restore
 
     - name: Publish (Generate EXE)
-      run: dotnet publish UEAESKeyFinder.sln -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeAllContentForSelfExtract=true -p:PublishTrimmed=false -o publish
+      run: dotnet publish UEAESKeyFinder/UEAESKeyFinder.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeAllContentForSelfExtract=true -p:PublishTrimmed=false -o publish
 
     - name: Upload EXE Artifact
       uses: actions/upload-artifact@v4
