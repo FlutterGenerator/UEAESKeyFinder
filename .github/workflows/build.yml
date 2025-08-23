@@ -11,6 +11,8 @@ on:
 jobs:
   build:
     runs-on: windows-latest
+    env:
+      TZ: Asia/Tashkent   # Устанавливаем часовой пояс Узбекистана
 
     steps:
       - name: Checkout
@@ -28,16 +30,16 @@ jobs:
       - name: Build Publish Binary
         run: dotnet publish ./UEAESKeyFinder/UEAESKeyFinder.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeAllContentForSelfExtract=true -p:PublishTrimmed=false -o ./publish
 
-      - name: Get DateTime
+      - name: Get DateTime Tashkent
         id: datetime
         shell: bash
-        run: echo "now=$(date '+%Y-%m-%d %H:%M:%S')" >> $GITHUB_ENV
+        run: echo "now=$(TZ='Asia/Tashkent' date '+%Y-%m-%d %H:%M:%S')" >> $GITHUB_ENV
 
       - name: Create or Update Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
-          name: UEAESKeyFinder Build
+          name: "UEAESKeyFinder Build (${{ env.now }})"
           body: "Build time: ${{ env.now }}"
           files: ./publish/**
         env:
