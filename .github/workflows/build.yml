@@ -1,0 +1,39 @@
+name: Build UEAESKeyFinder
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: |
+          8.0.x
+
+    - name: Restore dependencies
+      run: dotnet restore UEAESKeyFinder.sln
+
+    - name: Build
+      run: dotnet build UEAESKeyFinder.sln --configuration Release --no-restore
+
+    - name: Publish (Generate EXE)
+      run: dotnet publish UEAESKeyFinder.sln -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeAllContentForSelfExtract=true -p:PublishTrimmed=false -o publish
+
+    - name: Upload EXE Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: UEAESKeyFinder
+        path: publish/**
