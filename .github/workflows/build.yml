@@ -30,14 +30,15 @@ jobs:
 
       - name: Get DateTime
         id: datetime
-        run: echo "now=$(date +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_OUTPUT
+        shell: bash
+        run: echo "now=$(date '+%Y-%m-%d %H:%M:%S')" >> $GITHUB_ENV
 
       - name: Create or Update Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
           name: UEAESKeyFinder Build
-          body: "Build time: ${{ steps.datetime.outputs.now }}"
+          body: "Build time: ${{ env.now }}"
           files: ./publish/**
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
