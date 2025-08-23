@@ -2,7 +2,8 @@ name: Build UEAESKeyFinder
 
 on:
   push:
-    branches: [ main ]
+    branches:
+      - main
   workflow_dispatch:
 
 jobs:
@@ -10,26 +11,27 @@ jobs:
     runs-on: windows-latest
 
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v5
 
-    - name: Setup .NET
-      uses: actions/setup-dotnet@v4
-      with:
-        dotnet-version: |
-          8.0.x
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
 
-    - name: Restore dependencies
-      run: dotnet restore UEAESKeyFinder.sln
+      - name: Restore dependencies
+        run: dotnet restore UEAESKeyFinder.sln
 
-    - name: Build
-      run: dotnet build UEAESKeyFinder.sln --configuration Release --no-restore
+      - name: Build Publish Binary
+        run: dotnet publish ./UEAESKeyFinder/UEAESKeyFinder.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeAllContentForSelfExtract=true -p:PublishTrimmed=false -o ./publish
 
-    - name: Publish (Generate EXE)
-      run: dotnet publish UEAESKeyFinder/UEAESKeyFinder.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeAllContentForSelfExtract=true -p:PublishTrimmed=false -o publish
-
-    - name: Upload EXE Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: UEAESKeyFinder
-        path: publish/**
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: auto-${{ github.run_number }}
+          name: Авто-релиз ${{ github.run_number }}
+          body: "Автоматически сгенерированная сборка при пуше в main"
+          files: ./publish/**
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
