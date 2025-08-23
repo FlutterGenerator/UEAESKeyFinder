@@ -6,6 +6,6 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageVersion Include="Costura.Fody" Version="6.0.0" />
-    <PackageVersion Include="Fody" Version="6.9.1" />
+    <PackageVersion Include="Fody" Version="6.9.3" />
   </ItemGroup>
 </Project>
