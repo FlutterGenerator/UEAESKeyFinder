@@ -25,4 +25,16 @@ Found MyProject
 
 Found 1 AES Keys in 720ms
 0xD0DE16965D23CC8A46178FFFAB18130651D2C99F7B3D63ECC8FD04D691609572 (0N4Wll0jzIpGF4//qxgTBlHSyZ97PWPsyP0E1pFglXI=) at 140695177160459
+
 ```
+
+<div align="center">
+  <a href="https://github.com/FlutterGenerator/UEAESKeyFinder/releases">
+    <img src="https://img.shields.io/github/downloads/FlutterGenerator/UEAESKeyFinder/total?color=brightgreen&label=Downloads"/>
+  <a href="https://github.com/FlutterGenerator/UEAESKeyFinder/commits/main">
+    <img src="https://img.shields.io/github/last-commit/FlutterGenerator/UEAESKeyFinder?label=Updates"/>
+  </a>
+  <a href="https://github.com/FlutterGenerator/UEAESKeyFinder/forks">
+    <img src="https://img.shields.io/github/forks/FlutterGenerator/UEAESKeyFinder?style=social"/>
+  </a>
+</div>
