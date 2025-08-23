@@ -33,7 +33,6 @@ jobs:
         with:
           tag_name: latest
           name: UEAESKeyFinder Build
-          body: "Automatically generated build on push to main"
           files: ./publish/**
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
