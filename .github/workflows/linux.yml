@@ -1,0 +1,69 @@
+permissions:
+  contents: write
+name: Build UEAESKeyFinder .deb
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build-deb:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore dependencies
+        run: dotnet restore UEAESKeyFinder.sln
+
+      - name: Build Linux Binary
+        run: |
+          dotnet publish ./UEAESKeyFinder/UEAESKeyFinder.csproj \
+            -c Release \
+            -r linux-x64 \
+            --self-contained true \
+            -p:PublishSingleFile=true \
+            -p:IncludeAllContentForSelfExtract=true \
+            -p:PublishTrimmed=false \
+            -o ./publish/linux
+
+      - name: Prepare .deb package structure
+        run: |
+          mkdir -p ueaeskeyfinder_1.0.0/DEBIAN
+          mkdir -p ueaeskeyfinder_1.0.0/usr/local/bin
+          cp publish/linux/UEAESKeyFinder ueaeskeyfinder_1.0.0/usr/local/bin/ueaeskeyfinder
+
+          echo "Package: ueaeskeyfinder
+          Version: 1.0.0
+          Section: utils
+          Priority: optional
+          Architecture: amd64
+          Maintainer: Your Name <you@example.com>
+          Description: UEAESKeyFinder Linux version
+           A tool to find UE AES Keys." > ueaeskeyfinder_1.0.0/DEBIAN/control
+
+      - name: Build .deb package
+        run: dpkg-deb --build ueaeskeyfinder_1.0.0
+
+      - name: Get DateTime Tashkent/Uzbekistan
+        id: datetime
+        shell: bash
+        run: echo "now=$(date -u -d '+5 hour' '+%Y-%m-%d %H:%M:%S')" >> $GITHUB_ENV
+
+      - name: Create or Update Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: "UEAESKeyFinder Linux .deb Build (${{ env.now }})"
+          body: "Build time: ${{ env.now }}"
+          files: ueaeskeyfinder_1.0.0.deb
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
