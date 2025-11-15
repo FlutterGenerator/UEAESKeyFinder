@@ -1,3 +1,4 @@
+/**
 ﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -353,4 +354,4 @@ public class Searcher
         [DllImport("kernel32.dll")]
         public static extern IntPtr OpenProcess(int dwDesiredAccess, bool bInheritHandle, int dwProcessId);
     }
-}
+}*/
