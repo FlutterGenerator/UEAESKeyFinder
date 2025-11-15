@@ -12,24 +12,26 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
-    strategy:
-      matrix:
-        dotnet-version: [3.1.x, 6.0.x, 7.0.x, 8.0.x, 9.0.x, 10.0.x]
 
     steps:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Setup .NET SDK
+      - name: Setup .NET
         uses: actions/setup-dotnet@v5
         with:
-          dotnet-version: ${{ matrix.dotnet-version }}
-
+          dotnet-version: |
+           3.1.x
+           6.0.x
+           7.0.x
+           8.0.x
+           9.0.x
+           10.0.x
       - name: Restore dependencies
         run: dotnet restore UEAESKeyFinder.sln
 
       - name: Build Publish Binary
-        run: dotnet publish ./UEAESKeyFinder/UEAESKeyFinder.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeAllContentForSelfExtract=true -p:PublishTrimmed=false -o ./publish/${{ matrix.dotnet-version }}
+        run: dotnet publish ./UEAESKeyFinder/UEAESKeyFinder.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeAllContentForSelfExtract=true -p:PublishTrimmed=false -o ./publish
 
       - name: Get DateTime Tashkent/Uzbekistan
         id: datetime
@@ -40,8 +42,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
-          name: "UEAESKeyFinder Build (${{ env.now }}) - ${{ matrix.dotnet-version }}"
-          body: "Build time: ${{ env.now }} - .NET ${{ matrix.dotnet-version }}"
-          files: ./publish/${{ matrix.dotnet-version }}/**
+          name: "UEAESKeyFinder Build (${{ env.now }})"
+          body: "Build time: ${{ env.now }}"
+          files: ./publish/**
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
