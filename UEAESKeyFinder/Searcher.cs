@@ -377,7 +377,6 @@ public class Searcher
 
     public Searcher() { }
 
-    // Конструктор для ПК (процесс)
     public Searcher(Process p)
     {
         Process = p;
@@ -388,17 +387,15 @@ public class Searcher
         Win32.ReadProcessMemory(hProcess, AllocationBase, ProcessMemory, ProcessMemory.Length, ref bytesRead);
     }
 
-    // Конструктор для файлов (.exe или .so)
-    public Searcher(byte[] bytes, bool useAndroid = false)
+    public Searcher(byte[] bytes, bool useAndroid = false, bool isAPK = false)
     {
-        AllocationBase = 0;
         ProcessMemory = bytes;
         useUE4Lib = useAndroid;
+        AllocationBase = 0;
     }
 
     public void SetFilePath(string path) => FilePath = path;
 
-    // Исправляет ошибку CS1061
     public string SearchEngineVersion()
     {
         if (!string.IsNullOrEmpty(FilePath) && File.Exists(FilePath))
@@ -408,44 +405,32 @@ public class Searcher
         return "4.18.1"; 
     }
 
-    // Декодер для Android ARM64
-    private long DecodeARM64(int adrpIdx, int addIdx)
+    // Декодер для поиска адреса ключа в Android (.so)
+    private long DecodeARM64(int adrpIdx)
     {
         uint adrp = BitConverter.ToUInt32(ProcessMemory, adrpIdx);
-        uint add = BitConverter.ToUInt32(ProcessMemory, addIdx);
-
+        uint add = BitConverter.ToUInt32(ProcessMemory, adrpIdx + 4);
         long immhi = (adrp >> 5) & 0x7FFFF;
         long immlo = (adrp >> 29) & 0x3;
         long imm = (immhi << 2) | immlo;
         if ((imm & 0x100000) != 0) imm |= ~0xFFFFF;
-        long pc_page = (adrpIdx & ~0xFFF);
-        return pc_page + (imm << 12) + ((add >> 10) & 0xFFF);
+        return (adrpIdx & ~0xFFF) + (imm << 12) + ((add >> 10) & 0xFFF);
     }
 
-    // Валидация: убирает мусор, оставляет только реальные ключи
     private bool IsValidBinaryKey(byte[] key)
     {
-        if (key.All(b => b == 0x00) || key.All(b => b == 0xFF)) return false;
-        
-        int printable = 0;
-        HashSet<byte> uniqueBytes = new HashSet<byte>();
-
-        for (int i = 0; i < key.Length; i++)
-        {
-            if (key[i] >= 32 && key[i] <= 126) printable++;
-            uniqueBytes.Add(key[i]);
-        }
-
-        // Настоящий AES ключ - это случайный "шум". 
-        // В нем мало текста и много уникальных байтов.
-        return printable < 18 && uniqueBytes.Count >= 22;
+        if (key.All(b => b == 0)) return false;
+        int unique = key.Distinct().Count();
+        int printable = key.Count(b => b >= 32 && b <= 126);
+        // Настоящий ключ — это шум: много уникальных байт (22+), мало текста (<16 символов)
+        return unique >= 22 && printable < 16;
     }
 
     public Dictionary<ulong, string> FindAllPattern(out long elapsedMilliseconds)
     {
         Stopwatch timer = Stopwatch.StartNew();
         var results = new Dictionary<ulong, string>();
-        var foundKeysValue = new HashSet<string>();
+        var seen = new HashSet<string>();
 
         if (ProcessMemory == null || ProcessMemory.Length < 32)
         {
@@ -457,50 +442,27 @@ public class Searcher
         {
             for (int i = 0; i < ProcessMemory.Length - 12; i += 4)
             {
-                // Паттерн ADRP + ADD (ARM64)
+                // Ищем ADRP + ADD (инструкции загрузки адреса в ARM64)
                 if ((ProcessMemory[i + 3] & 0x9F) == 0x90 && (ProcessMemory[i + 7] & 0xBF) == 0x21)
                 {
                     try {
-                        long targetAddr = DecodeARM64(i, i + 4);
-                        if (targetAddr > 0 && targetAddr < ProcessMemory.Length - 32)
-                        {
+                        long addr = DecodeARM64(i);
+                        if (addr > 0 && addr < ProcessMemory.Length - 32) {
                             byte[] key = new byte[32];
-                            Buffer.BlockCopy(ProcessMemory, (int)targetAddr, key, 0, 32);
-                            if (IsValidBinaryKey(key)) AddKey(results, foundKeysValue, (ulong)targetAddr, key);
+                            Buffer.BlockCopy(ProcessMemory, (int)addr, key, 0, 32);
+                            if (IsValidBinaryKey(key)) AddKey(results, seen, (ulong)addr, key);
                         }
                     } catch { }
                 }
             }
         }
-        else // --- ПОИСК ДЛЯ WINDOWS (.exe) ---
+        else // --- ПОИСК ДЛЯ WINDOWS ---
         {
-            // 1. Бинарный поиск (UE 4.18 - 4.22)
             for (int i = 0; i < ProcessMemory.Length - 32; i += 4)
             {
                 byte[] key = new byte[32];
                 Buffer.BlockCopy(ProcessMemory, i, key, 0, 32);
-                if (IsValidBinaryKey(key)) AddKey(results, foundKeysValue, AllocationBase + (ulong)i, key);
-            }
-
-            // 2. Поиск через инструкции MOV (UE 4.25 - UE 5.4)
-            if (results.Count < 2) 
-            {
-                for (int i = 0; i < ProcessMemory.Length - 100; i++)
-                {
-                    if (ProcessMemory[i] == 0xC7 && (ProcessMemory[i+1] == 0x45 || ProcessMemory[i+1] == 0x44 || ProcessMemory[i+1] == 0x01))
-                    {
-                        byte[] assembled = new byte[32];
-                        int curr = i;
-                        bool ok = true;
-                        for (int j = 0; j < 8; j++) {
-                            if (curr + 10 > ProcessMemory.Length || ProcessMemory[curr] != 0xC7) { ok = false; break; }
-                            int off = (ProcessMemory[curr+1] == 0x01) ? 2 : 3;
-                            Buffer.BlockCopy(ProcessMemory, curr + off, assembled, j * 4, 4);
-                            curr += (off + 4);
-                        }
-                        if (ok && IsValidBinaryKey(assembled)) AddKey(results, foundKeysValue, AllocationBase + (ulong)i, assembled);
-                    }
-                }
+                if (IsValidBinaryKey(key)) AddKey(results, seen, AllocationBase + (ulong)i, key);
             }
         }
 
@@ -512,17 +474,12 @@ public class Searcher
     private void AddKey(Dictionary<ulong, string> res, HashSet<string> values, ulong addr, byte[] key)
     {
         string hex = BitConverter.ToString(key).Replace("-", "");
-        if (!values.Contains(hex)) {
-            res[addr] = "0x" + hex;
-            values.Add(hex);
-        }
+        if (values.Add(hex)) res[addr] = "0x" + hex;
     }
 
     public static class Win32
     {
-        [DllImport("kernel32.dll", SetLastError = true)]
+        [DllImport("kernel32.dll")]
         public static extern bool ReadProcessMemory(IntPtr hProcess, ulong lpBaseAddress, [Out] byte[] lpBuffer, int dwSize, ref int lpNumberOfBytesRead);
     }
 }
-
-
