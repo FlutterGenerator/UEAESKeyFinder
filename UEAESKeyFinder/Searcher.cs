@@ -462,10 +462,11 @@ public class Searcher
     {
         Stopwatch sw = Stopwatch.StartNew();
         var results = new Dictionary<ulong, string>();
-        var seenKeys = new HashSet<string>(); // Чтобы не дублировать одинаковые ключи
+        var seenKeys = new HashSet<string>(); 
 
         if (useUE4Lib)
         {
+            // --- Логика для Android (libUE4.so) ---
             for (int i = 0; i < ProcessMemory.Length - 16; i++)
             {
                 if (ProcessMemory[i] == 0x01 && ProcessMemory[i+1] == 0x01) {
@@ -478,8 +479,12 @@ public class Searcher
                         if (IsValidKey(potentialKey))
                         {
                             string hex = "0x" + BitConverter.ToString(potentialKey).Replace("-", "");
-                            if (seenKeys.Add(hex)) // Добавляем только если такого ключа еще не было
-                                results[AllocationBase + (ulong)addr] = hex;
+                            if (seenKeys.Add(hex)) 
+                            {
+                                string base64 = Convert.ToBase64String(potentialKey);
+                                // Форматируем строку сразу как тебе нужно
+                                results[AllocationBase + (ulong)addr] = $"{hex} ({base64}) at {AllocationBase + (ulong)addr}";
+                            }
                         }
                     }
                 }
@@ -487,11 +492,11 @@ public class Searcher
         }
         else
         {
+            // --- Логика для Windows (x64) ---
             for (int i = 0; i < ProcessMemory.Length - 100; i++)
             {
                 if (ProcessMemory[i] == 0xC7 && (ProcessMemory[i+1] == 0x45 || ProcessMemory[i+1] == 0x44))
                 {
-                    StringBuilder sb = new StringBuilder();
                     int curr = i;
                     bool fail = false;
                     byte[] keyBuffer = new byte[32];
@@ -499,9 +504,7 @@ public class Searcher
                     for (int j = 0; j < 8; j++)
                     {
                         if (curr + 7 > ProcessMemory.Length || ProcessMemory[curr] != 0xC7) { fail = true; break; }
-                        byte[] part = new byte[4];
-                        Buffer.BlockCopy(ProcessMemory, curr + 3, part, 0, 4);
-                        Buffer.BlockCopy(part, 0, keyBuffer, j * 4, 4);
+                        Buffer.BlockCopy(ProcessMemory, curr + 3, keyBuffer, j * 4, 4);
                         curr += 7; 
                         if (curr < ProcessMemory.Length && ProcessMemory[curr] == 0xE9) curr = FollowJMP(curr);
                     }
@@ -510,7 +513,11 @@ public class Searcher
                     {
                         string hex = "0x" + BitConverter.ToString(keyBuffer).Replace("-", "");
                         if (seenKeys.Add(hex))
-                            results[AllocationBase + (ulong)i] = hex;
+                        {
+                            string base64 = Convert.ToBase64String(keyBuffer);
+                            // Форматируем строку: 0xHEX (BASE64) at OFFSET
+                            results[AllocationBase + (ulong)i] = $"{hex} ({base64}) at {AllocationBase + (ulong)i}";
+                        }
                     }
                 }
             }
@@ -553,6 +560,7 @@ public class Searcher
         public static extern IntPtr OpenProcess(int dwDesiredAccess, bool bInheritHandle, int dwProcessId);
     }
 }
+
 
 
 
