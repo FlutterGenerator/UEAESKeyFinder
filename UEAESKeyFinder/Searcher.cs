@@ -361,7 +361,6 @@ public class Searcher
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Runtime.InteropServices;
@@ -377,6 +376,7 @@ public class Searcher
 
     public Searcher() { }
 
+    // Конструктор для процесса Windows
     public Searcher(Process p)
     {
         Process = p;
@@ -393,6 +393,7 @@ public class Searcher
         }
     }
 
+    // Конструктор для файла или libUE4
     public Searcher(byte[] bytes, bool useAndroid = false)
     {
         ProcessMemory = bytes;
@@ -400,6 +401,7 @@ public class Searcher
         AllocationBase = 0;
     }
 
+    // Для APK
     public Searcher(byte[] bytes, bool useAndroid, bool isAPK)
     {
         if (isAPK)
@@ -417,7 +419,7 @@ public class Searcher
 
     private byte[] ExtractLib(byte[] apkBytes, int offset)
     {
-        int libSize = 1024 * 1024;
+        int libSize = 1024 * 1024; // 1 МБ
         if (offset + libSize > apkBytes.Length) libSize = apkBytes.Length - offset;
         byte[] libData = new byte[libSize];
         Array.Copy(apkBytes, offset, libData, 0, libSize);
@@ -452,93 +454,52 @@ public class Searcher
         return (int)((((ulong)ADRPLoc & 0xFFFFF000) + ADRP + ADD) & 0xFFFFFFFF);
     }
 
-    // --- Поиск всех ключей ---
-    public Dictionary<ulong, string> FindAllPattern(out long elapsedMilliseconds)
+    // --- Главный метод: возвращает только правильный ключ ---
+    public string FindSingleKey(out long elapsedMilliseconds)
     {
-        var offsets = new Dictionary<ulong, string>();
-        var timer = Stopwatch.StartNew();
+        Stopwatch timer = Stopwatch.StartNew();
+        string aesKey = null;
 
-        // 1. Бинарные ключи
-        for (int i = 0; i < ProcessMemory.Length - 32; i += 16)
-        {
-            int zeros = 0;
-            for (int j = 0; j < 32; j++) if (ProcessMemory[i + j] == 0) zeros++;
-            if (zeros <= 1)
-            {
-                string hex = BitConverter.ToString(ProcessMemory, i, 32).Replace("-", "");
-                if (Regex.IsMatch(hex, @"^[A-Fa-f0-9]{64}$"))
-                    offsets[AllocationBase + (ulong)i] = "0x" + hex;
-            }
-        }
-
-        // 2. Текстовый HEX
-        string memText = Encoding.ASCII.GetString(ProcessMemory);
-        foreach (Match m in Regex.Matches(memText, @"[A-Fa-f0-9]{64}"))
-        {
-            if (!offsets.ContainsKey(AllocationBase + (ulong)m.Index))
-                offsets[AllocationBase + (ulong)m.Index] = "0x" + m.Value;
-        }
-
-        // 3. MOV/JMP ключи
-        for (int i = 3; i < ProcessMemory.Length - 100; i++)
-        {
-            if (ProcessMemory[i] == 0xC7)
-            {
-                try
-                {
-                    int addr = i + 4;
-                    string aesKey = BitConverter.ToString(ProcessMemory, addr, 4).Replace("-", "");
-                    int tempAddr = addr;
-                    while (aesKey.Length < 64)
-                    {
-                        if (ProcessMemory[tempAddr] == 0xE9) tempAddr = FollowJMP(tempAddr);
-                        if (ProcessMemory[tempAddr] != 0xC7 && ProcessMemory[tempAddr] != 0xE9) break;
-                        if (ProcessMemory[tempAddr] == 0xC7)
-                        {
-                            aesKey += BitConverter.ToString(ProcessMemory, tempAddr + 3, 4).Replace("-", "");
-                            tempAddr += 7;
-                        }
-                    }
-                    if (aesKey.Length == 64) offsets[AllocationBase + (ulong)i] = "0x" + aesKey;
-                }
-                catch { }
-            }
-        }
-
-        // 4. Android ARM64
         if (useUE4Lib)
         {
-            for (int i = 8; i < ProcessMemory.Length - 12; i++)
+            // Поиск ключа в Android libUE4.so
+            for (int i = 8; i < ProcessMemory.Length - 32; i++)
             {
                 if (ProcessMemory[i] == 0x01 && ProcessMemory[i + 1] == 0x01 &&
                     ProcessMemory[i + 2] == 0x40 && ProcessMemory[i + 3] == 0xAD)
                 {
-                    int res = GetADRLAddress(i - 8);
-                    if (res > 0 && res + 32 <= ProcessMemory.Length)
+                    int addr = GetADRLAddress(i - 8);
+                    if (addr > 0 && addr + 32 <= ProcessMemory.Length)
                     {
-                        string k = BitConverter.ToString(ProcessMemory, res, 32).Replace("-", "");
-                        offsets[AllocationBase + (ulong)res] = "0x" + k;
+                        aesKey = BitConverter.ToString(ProcessMemory, addr, 32).Replace("-", "");
+                        break;
                     }
+                }
+            }
+        }
+        else
+        {
+            // Для всех версий UE4 на Windows
+            for (int i = 0; i < ProcessMemory.Length - 32; i++)
+            {
+                // Проверяем 32 байта, чтобы не было нулей
+                int zeros = 0;
+                for (int j = 0; j < 32; j++) if (ProcessMemory[i + j] == 0) zeros++;
+                if (zeros > 1) continue;
+
+                // Берем HEX ключ
+                string hex = BitConverter.ToString(ProcessMemory, i, 32).Replace("-", "");
+                if (Regex.IsMatch(hex, @"^[A-Fa-f0-9]{64}$"))
+                {
+                    aesKey = hex;
+                    break; // возвращаем только первый правильный
                 }
             }
         }
 
         timer.Stop();
         elapsedMilliseconds = timer.ElapsedMilliseconds;
-        return offsets;
-    }
-
-    // --- Метод для одного ключа ---
-    public string FindSingleKey(out long elapsedMilliseconds)
-    {
-        var allKeys = FindAllPattern(out elapsedMilliseconds);
-        foreach (var kv in allKeys)
-        {
-            string key = kv.Value;
-            if (key.StartsWith("0x")) key = key.Substring(2);
-            return key; // возвращаем первый найденный
-        }
-        return null;
+        return aesKey;
     }
 
     public void SetFilePath(string path) => FilePath = path;
@@ -551,4 +512,5 @@ public class Searcher
             [Out] byte[] lpBuffer, int dwSize, int lpNumberOfBytesRead = 0);
     }
 }
+
 
