@@ -363,133 +363,195 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
-using System.Linq;
+using System.Text;
+using System.Text.RegularExpressions;
 using System.Runtime.InteropServices;
+using System.Linq;
 
-namespace UEAesKeyFinder
+public class Searcher
 {
-    public class Searcher
+    private bool useUE4Lib = false;
+    private IntPtr hProcess;
+    private Process Process;
+    private ulong AllocationBase;
+    private byte[] ProcessMemory;
+    private string FilePath;
+
+    public Searcher() { }
+
+    public Searcher(Process p)
     {
-        private byte[] Data;
-        private bool isAndroid;
-        private ulong BaseAddr = 0;
+        Process = p;
+        hProcess = p.Handle;
+        AllocationBase = (ulong)p.MainModule.BaseAddress;
+        ProcessMemory = new byte[p.MainModule.ModuleMemorySize];
 
-        public Searcher(byte[] data, bool android = false) { Data = data; isAndroid = android; }
-
-        public Searcher(Process p)
+        // Чтение памяти по 2048 байт с проверкой границ
+        for (int i = 0; i < ProcessMemory.Length; i += 2048)
         {
-            try {
-                BaseAddr = (ulong)p.MainModule.BaseAddress;
-                Data = new byte[p.MainModule.ModuleMemorySize];
-                int read = 0;
-                ReadProcessMemory(p.Handle, BaseAddr, Data, Data.Length, ref read);
-            } catch (Exception ex) {
-                throw new Exception($"Failed to read process memory: {ex.Message}");
+            int bytesToRead = Math.Min(2048, ProcessMemory.Length - i);
+            byte[] buffer = new byte[bytesToRead];
+            if (Win32.ReadProcessMemory(hProcess, AllocationBase + (ulong)i, buffer, bytesToRead, out _))
+            {
+                Buffer.BlockCopy(buffer, 0, ProcessMemory, i, bytesToRead);
             }
         }
+    }
 
-        [DllImport("kernel32.dll")]
-        private static extern bool ReadProcessMemory(IntPtr h, ulong b, byte[] buf, int s, ref int r);
+    public Searcher(byte[] bytes)
+    {
+        AllocationBase = 0;
+        ProcessMemory = bytes;
+    }
 
-        public static byte[] ExtractSoFromApk(string path)
+    public Searcher(byte[] bytes, bool useAndroid, bool isAPK = false)
+    {
+        if (isAPK)
         {
-            using (ZipArchive zip = ZipFile.OpenRead(path))
+            // Поиск "APK Sig Block"
+            int sigOffset = FindPattern(bytes, Encoding.ASCII.GetBytes("APK Sig Block"));
+            if (sigOffset == -1) throw new Exception("APK Sig Block not found!");
+
+            // Поиск libUE4.so
+            byte[] libName = Encoding.ASCII.GetBytes("lib/arm64-v8a/libUE4.so");
+            int nameOffset = FindPattern(bytes, libName, sigOffset);
+            if (nameOffset == -1) throw new Exception("libUE4.so entry not found!");
+
+            // Извлечение размеров из ZIP-заголовка (оффсеты -4 от имени файла обычно содержат метаданные)
+            int localHeaderOffset = BitConverter.ToInt32(bytes, nameOffset - 4);
+            int compressedSize = BitConverter.ToInt32(bytes, localHeaderOffset + 18);
+            int uncompressedSize = BitConverter.ToInt32(bytes, localHeaderOffset + 22);
+            int nameLen = BitConverter.ToInt16(bytes, localHeaderOffset + 26);
+            int extraLen = BitConverter.ToInt16(bytes, localHeaderOffset + 28);
+            int dataStart = localHeaderOffset + 30 + nameLen + extraLen;
+
+            using (var ms = new MemoryStream(bytes, dataStart, compressedSize))
+            using (var ds = new DeflateStream(ms, CompressionMode.Decompress))
+            using (var output = new MemoryStream())
             {
-                var entry = zip.Entries
-                    .Where(e => e.FullName.EndsWith(".so") && (e.FullName.Contains("arm64") || e.FullName.Contains("v8a")))
-                    .OrderByDescending(e => e.Length)
-                    .FirstOrDefault();
+                ds.CopyTo(output);
+                ProcessMemory = output.ToArray();
+            }
+        }
+        else
+        {
+            ProcessMemory = bytes;
+        }
+        useUE4Lib = useAndroid;
+    }
 
-                if (entry == null) throw new Exception("libUE4.so not found in APK!");
+    private int FindPattern(byte[] source, byte[] pattern, int startOffset = 0)
+    {
+        for (int i = startOffset; i <= source.Length - pattern.Length; i++)
+        {
+            if (source[i] != pattern[0]) continue;
+            if (source.Skip(i).Take(pattern.Length).SequenceEqual(pattern)) return i;
+        }
+        return -1;
+    }
 
-                using (var s = entry.Open())
-                using (var ms = new MemoryStream())
+    public string SearchEngineVersion()
+    {
+        if (!string.IsNullOrEmpty(FilePath) && File.Exists(FilePath))
+            return FileVersionInfo.GetVersionInfo(FilePath).FileVersion;
+
+        byte[] productVersionPattern = { 0x01, 0x00, 0x50, 0x00, 0x72, 0x00, 0x6F, 0x00, 0x64, 0x00, 0x75, 0x00, 0x63, 0x00, 0x74, 0x00, 0x56, 0x00, 0x65, 0x00, 0x72, 0x00, 0x73, 0x00, 0x69, 0x00, 0x6F, 0x00, 0x6E, 0x00, 0x00, 0x00 };
+        
+        int idx = FindPattern(ProcessMemory, productVersionPattern);
+        if (idx != -1 && idx + productVersionPattern.Length + 12 <= ProcessMemory.Length)
+        {
+            return Encoding.Unicode.GetString(ProcessMemory, idx + productVersionPattern.Length, 12).TrimEnd('\0');
+        }
+        return "";
+    }
+
+    public int FollowJMP(int addr, int depth = 0)
+    {
+        if (depth > 10 || addr + 5 >= ProcessMemory.Length) return addr; // Защита от бесконечной рекурсии
+        
+        int offset = BitConverter.ToInt32(ProcessMemory, addr + 1);
+        int target = addr + offset + 5;
+
+        if (target >= 0 && target + 5 < ProcessMemory.Length && ProcessMemory[target] == 0xE9)
+            return FollowJMP(target, depth + 1);
+
+        return target;
+    }
+
+    public Dictionary<ulong, string> FindAllPattern(out long elapsed)
+    {
+        Stopwatch sw = Stopwatch.StartNew();
+        var results = new Dictionary<ulong, string>();
+
+        if (useUE4Lib)
+        {
+            // ARM64 ADRP/ADD Pattern
+            byte[] armPattern = { 0x01, 0x01, 0x40, 0xAD, 0x01, 0x00, 0x00, 0xAD, 0xC0, 0x03, 0x5F, 0xD6 };
+            for (int i = 8; i < ProcessMemory.Length - 12; i++)
+            {
+                if (ProcessMemory.Skip(i).Take(armPattern.Length).SequenceEqual(armPattern))
                 {
-                    s.CopyTo(ms);
-                    return ms.ToArray();
-                }
-            }
-        }
-
-        private bool IsValidKey(byte[] k)
-        {
-            // Отсекаем пустые или забитые одним цветом блоки
-            if (k.All(b => b == 0) || k.All(b => b == 0xFF)) return false;
-
-            // Считаем уникальные байты (энтропия)
-            int unique = k.Distinct().Count();
-
-            // В реальном AES ключе должно быть много разных байтов (обычно > 20)
-            // Если поставить 17, будет много мусора. 21 — золотая середина.
-            return unique >= 21; 
-        }
-
-        private long DecodeARM64(int i)
-        {
-            try
-            {
-                uint adrp = BitConverter.ToUInt32(Data, i);
-                uint add = BitConverter.ToUInt32(Data, i + 4);
-                long immhi = (adrp >> 5) & 0x7FFFF;
-                long immlo = (adrp >> 29) & 0x3;
-                long imm = (immhi << 2) | immlo;
-                if ((imm & 0x100000) != 0) imm |= ~0xFFFFF;
-                return (i & ~0xFFF) + (imm << 12) + ((add >> 10) & 0xFFF);
-            }
-            catch { return -1; }
-        }
-
-        public Dictionary<ulong, string> FindAllPattern(out long ms)
-        {
-            Stopwatch sw = Stopwatch.StartNew();
-            var res = new Dictionary<ulong, string>();
-            var seen = new HashSet<string>();
-
-            // ШАГ 1: Поиск по инструкциям (Для Android .so)
-            if (isAndroid)
-            {
-                for (int i = 0; i < Data.Length - 12; i += 4)
-                {
-                    if ((Data[i + 3] & 0x9F) == 0x90) // Опкод ADRP
+                    int addr = GetADRLAddress(i - 8);
+                    if (addr > 0 && addr + 32 <= ProcessMemory.Length)
                     {
-                        long addr = DecodeARM64(i);
-                        if (addr > 0 && addr < Data.Length - 32)
-                        {
-                            byte[] k = new byte[32];
-                            Buffer.BlockCopy(Data, (int)addr, k, 0, 32);
-                            if (IsValidKey(k)) Add(res, seen, (ulong)addr, k);
-                        }
+                        string key = BitConverter.ToString(ProcessMemory, addr, 32).Replace("-", "");
+                        results[AllocationBase + (ulong)addr] = "0x" + key;
                     }
                 }
             }
-
-            // ШАГ 2: Глубокое сканирование (Для ПК и старых версий)
-            // Сканируем с шагом 4 байта (выравнивание), чтобы не ловить дубли
-            if (res.Count == 0 || !isAndroid)
+        }
+        else
+        {
+            // X64 Pattern (C7 45 D0 ...)
+            for (int i = 0; i < ProcessMemory.Length - 64; i++)
             {
-                for (int i = 0; i < Data.Length - 32; i += 4)
+                if (ProcessMemory[i] == 0xC7 && (ProcessMemory[i+1] == 0x45 || ProcessMemory[i+1] == 0x01))
                 {
-                    if (Data[i] == 0x00 || Data[i] == 0xFF) continue;
+                    // Упрощенная логика сбора ключа из 8 частей (mov [ebp-X], 4-bytes)
+                    StringBuilder sb = new StringBuilder();
+                    int currentIdx = i;
+                    bool valid = true;
 
-                    byte[] k = new byte[32];
-                    Buffer.BlockCopy(Data, i, k, 0, 32);
-                    if (IsValidKey(k))
+                    for (int j = 0; j < 8; j++)
                     {
-                        Add(res, seen, BaseAddr + (ulong)i, k);
-                        i += 28; // Прыгаем вперед, чтобы не сканировать тот же ключ
+                        if (currentIdx + 7 > ProcessMemory.Length || ProcessMemory[currentIdx] != 0xC7) { valid = false; break; }
+                        sb.Append(BitConverter.ToString(ProcessMemory, currentIdx + 3, 4).Replace("-", ""));
+                        currentIdx += 7; 
+                        if (currentIdx < ProcessMemory.Length && ProcessMemory[currentIdx] == 0xE9) currentIdx = FollowJMP(currentIdx);
                     }
+
+                    if (valid && sb.Length == 64)
+                        results[AllocationBase + (ulong)i] = "0x" + sb.ToString();
                 }
             }
-
-            sw.Stop();
-            ms = sw.ElapsedMilliseconds;
-            return res;
         }
 
-        private void Add(Dictionary<ulong, string> d, HashSet<string> s, ulong a, byte[] k)
-        {
-            string h = BitConverter.ToString(k).Replace("-", "");
-            if (s.Add(h)) d[a] = h;
-        }
+        sw.Stop();
+        elapsed = sw.ElapsedMilliseconds;
+        return results;
+    }
+
+    // Вспомогательные методы для ARM64 (оставлены без изменений логики, но добавлены проверки)
+    public int GetADRLAddress(int loc) 
+    {
+        try {
+            ulong adrp = DecodeADRP(BitConverter.ToInt32(ProcessMemory, loc));
+            ulong add = DecodeADD(BitConverter.ToInt32(ProcessMemory, loc + 4));
+            return (int)((((ulong)loc & 0xFFFFF000) + adrp + add) & 0xFFFFFFFF);
+        } catch { return -1; }
+    }
+
+    private ulong DecodeADRP(int ins) {
+        long imm = ((ins >> 29) & 3) | (((ins >> 5) & 0x7FFFF) << 2);
+        if ((imm & 0x100000) != 0) imm |= -1L << 21;
+        return (ulong)(imm << 12);
+    }
+
+    private ulong DecodeADD(int ins) => (ulong)((ins >> 10) & 0xFFF);
+
+    public static class Win32
+    {
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern bool ReadProcessMemory(IntPtr hProcess, ulong lpBaseAddress, [Out] byte[] lpBuffer, int dwSize, out int lpNumberOfBytesRead);
     }
 }
