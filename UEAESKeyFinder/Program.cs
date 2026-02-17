@@ -2,73 +2,92 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
-using System.Runtime.InteropServices;
-using System.Threading;
 using System.Linq;
 
-namespace UEAesKeyFinder
+namespace UniversalUEAesFinder
 {
     class Program
     {
-        [DllImport("ntdll.dll", PreserveSig = false)]
-        public static extern void NtSuspendProcess(IntPtr processHandle);
-
-        public static byte[] GetHex(string hex)
-        {
-            if (hex.StartsWith("0x")) hex = hex.Substring(2);
-            var r = new byte[hex.Length / 2];
-            for (var i = 0; i < r.Length; i++) r[i] = Convert.ToByte(hex.Substring(i * 2, 2), 16);
-            return r;
-        }
-
         static void Main(string[] args)
         {
-            Searcher searcher = null;
-            Console.WriteLine("=== UE AES Key Finder (PC/Android) ===");
-            Console.Write("0: Memory\n1: File\n2: Dump\n3: libUE4.so\n4: APK\nUse: ");
-            
-            char method = Console.ReadKey().KeyChar;
+            Console.Title = "Universal UE AES Finder | PC - SO - APK";
+            Console.WriteLine("=== Universal UE AES Key Finder (4.18 - 5.4) ===");
+            Console.WriteLine("Select Mode:");
+            Console.WriteLine("0: PC Process (Memory Scan)");
+            Console.WriteLine("1: PC File (.exe / .dump)");
+            Console.WriteLine("2: Android Library (.so)");
+            Console.WriteLine("3: Android Package (.apk)");
+            Console.Write("\nChoice: ");
+
+            char mode = Console.ReadKey().KeyChar;
             Console.WriteLine("\n");
 
-            try {
-                switch (method)
+            try
+            {
+                Searcher searcher = null;
+                string input = "";
+
+                switch (mode)
                 {
                     case '0':
-                        Console.Write("Enter process name: ");
-                        string procName = Console.ReadLine();
-                        Process target = Process.GetProcesses().FirstOrDefault(p => p.ProcessName.Contains(procName));
-                        if (target == null) throw new Exception("Process not found");
+                        Console.Write("Enter Process Name (e.g. FortniteClient): ");
+                        input = Console.ReadLine();
+                        Process target = Process.GetProcesses().FirstOrDefault(p => p.ProcessName.Contains(input, StringComparison.OrdinalIgnoreCase));
+                        if (target == null) throw new Exception("Process not found!");
                         searcher = new Searcher(target);
                         break;
+
                     case '1':
                     case '2':
-                    case '3':
-                    case '4':
-                        Console.Write("Enter path: ");
-                        string path = Console.ReadLine().Replace("\"", "");
-                        if (!File.Exists(path)) throw new Exception("File not found");
-                        
-                        bool isAndroid = (method == '3' || method == '4');
-                        searcher = new Searcher(File.ReadAllBytes(path), isAndroid);
-                        searcher.SetFilePath(path);
+                        Console.Write("Enter File Path: ");
+                        input = Console.ReadLine().Replace("\"", "");
+                        if (!File.Exists(input)) throw new Exception("File not found!");
+                        searcher = new Searcher(File.ReadAllBytes(input), mode == '2');
                         break;
-                    default: return;
+
+                    case '3':
+                        Console.Write("Enter APK Path: ");
+                        input = Console.ReadLine().Replace("\"", "");
+                        if (!File.Exists(input)) throw new Exception("APK file not found!");
+                        Console.WriteLine("Extracting library from APK...");
+                        byte[] soData = Searcher.ExtractSoFromApk(input);
+                        searcher = new Searcher(soData, true);
+                        break;
+
+                    default:
+                        Console.WriteLine("Invalid mode.");
+                        return;
                 }
 
-                var keys = searcher.FindAllPattern(out long took);
-                Console.WriteLine($"Found {keys.Count} keys in {took}ms\n");
+                Console.WriteLine("Scanning... Please wait.");
+                var keys = searcher.FindAllPattern(out long ms);
+
+                Console.ForegroundColor = ConsoleColor.Green;
+                Console.WriteLine($"\nFound {keys.Count} keys in {ms} ms:");
+                Console.ResetColor();
 
                 foreach (var k in keys)
                 {
-                    byte[] bytes = GetHex(k.Value);
-                    string b64 = Convert.ToBase64String(bytes);
-                    Console.WriteLine($"HEX: {k.Value}");
-                    Console.WriteLine($"B64: {b64}");
-                    Console.WriteLine($"Offset: 0x{k.Key:X}\n");
-                }
-            } catch (Exception ex) { Console.WriteLine("Error: " + ex.Message); }
+                    string hex = k.Value;
+                    byte[] keyBytes = Enumerable.Range(0, hex.Length)
+                                     .Where(x => x % 2 == 0)
+                                     .Select(x => Convert.ToByte(hex.Substring(x, 2), 16))
+                                     .ToArray();
 
-            Console.WriteLine("Done. Press Enter.");
+                    Console.WriteLine("--------------------------------------------------");
+                    Console.WriteLine($"HEX:    0x{hex}");
+                    Console.WriteLine($"Base64: {Convert.ToBase64String(keyBytes)}");
+                    Console.WriteLine($"Offset: 0x{k.Key:X}");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.ForegroundColor = ConsoleColor.Red;
+                Console.WriteLine($"\nError: {ex.Message}");
+                Console.ResetColor();
+            }
+
+            Console.WriteLine("\nPress Enter to exit.");
             Console.ReadLine();
         }
     }
