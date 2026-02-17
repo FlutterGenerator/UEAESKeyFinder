@@ -445,8 +445,8 @@ public class Searcher
             using (var deflateStream = new DeflateStream(compressedStream, CompressionMode.Decompress))
             using (var uncompressedLib = new MemoryStream())
             {
-                deflateStream.CopyTo(ununcompressedLib);
-                ProcessMemory = ununcompressedLib.ToArray();
+                deflateStream.CopyTo(uncompressedLib);
+                ProcessMemory = uncompressedLib.ToArray();
             }
         }
         else
@@ -572,3 +572,4 @@ public class Searcher
         public static extern bool ReadProcessMemory(IntPtr hProcess, ulong lpBaseAddress, [Out] byte[] lpBuffer, int dwSize, int lpNumberOfBytesRead = 0);
     }
 }
+
