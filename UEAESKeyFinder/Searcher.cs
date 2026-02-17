@@ -362,114 +362,124 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
-using System.Text;
-using System.Runtime.InteropServices;
+using System.IO.Compression;
 using System.Linq;
+using System.Runtime.InteropServices;
 
-public class Searcher
+namespace UniversalUEAesFinder
 {
-    private bool useUE4Lib = false;
-    private IntPtr hProcess;
-    private Process Process;
-    private ulong AllocationBase;
-    private byte[] ProcessMemory;
-    private string FilePath;
-
-    public Searcher() { }
-
-    public Searcher(Process p)
+    public class Searcher
     {
-        Process = p;
-        hProcess = p.Handle;
-        AllocationBase = (ulong)p.MainModule.BaseAddress;
-        ProcessMemory = new byte[p.MainModule.ModuleMemorySize];
-        int bytesRead = 0;
-        Win32.ReadProcessMemory(hProcess, AllocationBase, ProcessMemory, ProcessMemory.Length, ref bytesRead);
-    }
+        private byte[] Data;
+        private bool isAndroid;
+        private ulong BaseAddr = 0;
 
-    public Searcher(byte[] bytes, bool useAndroid = false, bool isAPK = false)
-    {
-        ProcessMemory = bytes;
-        useUE4Lib = useAndroid;
-        AllocationBase = 0;
-    }
+        public Searcher(byte[] data, bool android = false) { Data = data; isAndroid = android; }
 
-    public void SetFilePath(string path) => FilePath = path;
-
-    public string SearchEngineVersion() => "4.18 - 4.27 (Auto)";
-
-    private bool IsValidBinaryKey(byte[] key)
-    {
-        if (key.All(b => b == 0) || key.All(b => b == 0xFF)) return false;
-        int unique = key.Distinct().Count();
-        // Снизил порог до 18, чтобы находить ключи в старых версиях (4.18/4.22)
-        return unique >= 18; 
-    }
-
-    private long DecodeARM64(int adrpIdx)
-    {
-        uint adrp = BitConverter.ToUInt32(ProcessMemory, adrpIdx);
-        uint add = BitConverter.ToUInt32(ProcessMemory, adrpIdx + 4);
-        long immhi = (adrp >> 5) & 0x7FFFF;
-        long immlo = (adrp >> 29) & 0x3;
-        long imm = (immhi << 2) | immlo;
-        if ((imm & 0x100000) != 0) imm |= ~0xFFFFF;
-        return (adrpIdx & ~0xFFF) + (imm << 12) + ((add >> 10) & 0xFFF);
-    }
-
-    public Dictionary<ulong, string> FindAllPattern(out long elapsedMilliseconds)
-    {
-        Stopwatch timer = Stopwatch.StartNew();
-        var results = new Dictionary<ulong, string>();
-        var seen = new HashSet<string>();
-
-        if (ProcessMemory == null || ProcessMemory.Length < 32) { elapsedMilliseconds = 0; return results; }
-
-        // --- СПОСОБ 1: Поиск через ADRP/ADD (Для новых версий Android) ---
-        if (useUE4Lib)
+        public Searcher(Process p)
         {
-            for (int i = 0; i < ProcessMemory.Length - 12; i += 4)
+            BaseAddr = (ulong)p.MainModule.BaseAddress;
+            Data = new byte[p.MainModule.ModuleMemorySize];
+            int read = 0;
+            ReadProcessMemory(p.Handle, BaseAddr, Data, Data.Length, ref read);
+        }
+
+        [DllImport("kernel32.dll")]
+        private static extern bool ReadProcessMemory(IntPtr h, ulong b, byte[] buf, int s, ref int r);
+
+        public static byte[] ExtractSoFromApk(string path)
+        {
+            using (ZipArchive zip = ZipFile.OpenRead(path))
             {
-                if ((ProcessMemory[i + 3] & 0x9F) == 0x90) // Инструкция ADRP
+                // Поиск основной библиотеки Unreal Engine в папках для 64-битных систем
+                var entry = zip.Entries
+                    .Where(e => e.FullName.EndsWith(".so") && (e.FullName.Contains("arm64") || e.FullName.Contains("v8a")))
+                    .OrderByDescending(e => e.Length)
+                    .FirstOrDefault();
+
+                if (entry == null) throw new Exception("Could not find libUE4.so (arm64) inside the APK!");
+
+                using (var s = entry.Open())
+                using (var ms = new MemoryStream())
                 {
-                    try {
-                        long addr = DecodeARM64(i);
-                        if (addr > 0 && addr < ProcessMemory.Length - 32) {
-                            byte[] key = new byte[32];
-                            Buffer.BlockCopy(ProcessMemory, (int)addr, key, 0, 32);
-                            if (IsValidBinaryKey(key)) AddKey(results, seen, (ulong)addr, key);
-                        }
-                    } catch { }
+                    s.CopyTo(ms);
+                    return ms.ToArray();
                 }
             }
         }
 
-        // --- СПОСОБ 2: Прямой поиск байт (Для 4.18.1, 4.22.3 и когда способ 1 не нашел) ---
-        // Если ключей 0, включаем "Грубую силу"
-        if (results.Count == 0)
+        private bool IsValidKey(byte[] k)
         {
-            for (int i = 0; i < ProcessMemory.Length - 32; i += 4)
-            {
-                byte[] key = new byte[32];
-                Buffer.BlockCopy(ProcessMemory, i, key, 0, 32);
-                if (IsValidBinaryKey(key)) AddKey(results, seen, AllocationBase + (ulong)i, key);
-            }
+            if (k.All(b => b == 0) || k.All(b => b == 0xFF)) return false;
+            int unique = k.Distinct().Count();
+            // Порог энтропии: 17 уникальных байт из 32 — стандарт для ключей UE 4.18 - 5.4
+            return unique >= 17; 
         }
 
-        timer.Stop();
-        elapsedMilliseconds = timer.ElapsedMilliseconds;
-        return results;
-    }
+        private long DecodeARM64(int i)
+        {
+            try
+            {
+                uint adrp = BitConverter.ToUInt32(Data, i);
+                uint add = BitConverter.ToUInt32(Data, i + 4);
+                long immhi = (adrp >> 5) & 0x7FFFF;
+                long immlo = (adrp >> 29) & 0x3;
+                long imm = (immhi << 2) | immlo;
+                if ((imm & 0x100000) != 0) imm |= ~0xFFFFF;
+                return (i & ~0xFFF) + (imm << 12) + ((add >> 10) & 0xFFF);
+            }
+            catch { return -1; }
+        }
 
-    private void AddKey(Dictionary<ulong, string> res, HashSet<string> values, ulong addr, byte[] key)
-    {
-        string hex = BitConverter.ToString(key).Replace("-", "");
-        if (values.Add(hex)) res[addr] = "0x" + hex;
-    }
+        public Dictionary<ulong, string> FindAllPattern(out long ms)
+        {
+            Stopwatch sw = Stopwatch.StartNew();
+            var res = new Dictionary<ulong, string>();
+            var seen = new HashSet<string>();
 
-    public static class Win32
-    {
-        [DllImport("kernel32.dll")]
-        public static extern bool ReadProcessMemory(IntPtr h, ulong b, byte[] buf, int s, ref int r);
+            // ШАГ 1: Поиск по инструкциям (Android ADRP/ADD для версий 4.25 - 5.4)
+            if (isAndroid)
+            {
+                for (int i = 0; i < Data.Length - 12; i += 4)
+                {
+                    if ((Data[i + 3] & 0x9F) == 0x90) // Проверка опкода ADRP
+                    {
+                        long addr = DecodeARM64(i);
+                        if (addr > 0 && addr < Data.Length - 32)
+                        {
+                            byte[] k = new byte[32];
+                            Buffer.BlockCopy(Data, (int)addr, k, 0, 32);
+                            if (IsValidKey(k)) Add(res, seen, (ulong)addr, k);
+                        }
+                    }
+                }
+            }
+
+            // ШАГ 2: Глубокое бинарное сканирование (ПК и старые версии Android 4.18 - 4.24)
+            if (res.Count == 0)
+            {
+                for (int i = 0; i < Data.Length - 32; i++)
+                {
+                    if (Data[i] == 0x00 || Data[i] == 0xFF) continue;
+                    byte[] k = new byte[32];
+                    Buffer.BlockCopy(Data, i, k, 0, 32);
+                    if (IsValidKey(k))
+                    {
+                        Add(res, seen, BaseAddr + (ulong)i, k);
+                        i += 31; // Пропускаем длину найденного ключа
+                    }
+                }
+            }
+
+            sw.Stop();
+            ms = sw.ElapsedMilliseconds;
+            return res;
+        }
+
+        private void Add(Dictionary<ulong, string> d, HashSet<string> s, ulong a, byte[] k)
+        {
+            string h = BitConverter.ToString(k).Replace("-", "");
+            if (s.Add(h)) d[a] = h;
+        }
     }
 }
