@@ -366,7 +366,7 @@ using System.IO.Compression;
 using System.Linq;
 using System.Runtime.InteropServices;
 
-namespace UniversalUEAesFinder
+namespace UEAesKeyFinder
 {
     public class Searcher
     {
@@ -483,3 +483,4 @@ namespace UniversalUEAesFinder
         }
     }
 }
+
