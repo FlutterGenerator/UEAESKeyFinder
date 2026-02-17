@@ -366,6 +366,7 @@ using System.IO.Compression;
 using System.Text;
 using System.Runtime.InteropServices;
 using System.Linq;
+using System.Text.RegularExpressions; // ИСПРАВЛЕНО: Добавлено для работы Regex
 
 public class Searcher
 {
@@ -378,7 +379,6 @@ public class Searcher
 
     public Searcher() { }
 
-    // Важно для Program.cs (метод 1 и 2)
     public void SetFilePath(string path)
     {
         FilePath = path;
@@ -395,6 +395,7 @@ public class Searcher
         {
             int bytesToRead = Math.Min(4096, ProcessMemory.Length - i);
             byte[] buffer = new byte[bytesToRead];
+            // Исправлено: Работает с out int в Win32
             if (Win32.ReadProcessMemory(hProcess, AllocationBase + (ulong)i, buffer, bytesToRead, out _))
             {
                 Buffer.BlockCopy(buffer, 0, ProcessMemory, i, bytesToRead);
@@ -406,7 +407,6 @@ public class Searcher
     {
         if (isAPK)
         {
-            // Упрощенный поиск libUE4.so в APK
             byte[] libName = Encoding.ASCII.GetBytes("lib/arm64-v8a/libUE4.so");
             int nameOffset = FindPattern(bytes, libName);
             if (nameOffset == -1) throw new Exception("libUE4.so not found!");
@@ -435,10 +435,13 @@ public class Searcher
         if (!string.IsNullOrEmpty(FilePath) && File.Exists(FilePath))
             return FileVersionInfo.GetVersionInfo(FilePath).FileVersion;
         
-        // Поиск версии в памяти (для UE4 обычно формат 4.X.X)
-        string memStr = Encoding.ASCII.GetString(ProcessMemory);
-        var match = Regex.Match(memStr, @"4\.\d+\.\d+");
-        return match.Success ? match.Value : "4.18.1";
+        // ИСПРАВЛЕНО: Безопасное чтение версии без OutOfMemory
+        try {
+            int checkLength = Math.Min(ProcessMemory.Length, 5000000); 
+            string memStr = Encoding.ASCII.GetString(ProcessMemory, 0, checkLength);
+            var match = Regex.Match(memStr, @"4\.\d+\.\d+");
+            return match.Success ? match.Value : "4.18.1";
+        } catch { return "4.18.1"; }
     }
 
     public Dictionary<ulong, string> FindAllPattern(out long elapsed)
@@ -448,8 +451,6 @@ public class Searcher
 
         if (useUE4Lib)
         {
-            // ARM64 ADRP/ADD
-            byte[] armPattern = { 0x01, 0x01, 0x40, 0xAD, 0x01, 0x00, 0x00, 0xAD };
             for (int i = 0; i < ProcessMemory.Length - 16; i++)
             {
                 if (ProcessMemory[i] == 0x01 && ProcessMemory[i+1] == 0x01) {
@@ -461,7 +462,6 @@ public class Searcher
         }
         else
         {
-            // X64 (UE 4.18.1+) сборка ключа из инструкций mov
             for (int i = 0; i < ProcessMemory.Length - 100; i++)
             {
                 if (ProcessMemory[i] == 0xC7 && (ProcessMemory[i+1] == 0x45 || ProcessMemory[i+1] == 0x44))
@@ -486,6 +486,7 @@ public class Searcher
     }
 
     private int FollowJMP(int addr) {
+        if (addr + 5 > ProcessMemory.Length) return addr;
         int offset = BitConverter.ToInt32(ProcessMemory, addr + 1);
         return addr + offset + 5;
     }
@@ -501,20 +502,25 @@ public class Searcher
 
     private int FindPattern(byte[] src, byte[] pat) {
         for (int i = 0; i <= src.Length - pat.Length; i++) {
-            if (src[i] == pat[0] && src.Skip(i).Take(pat.Length).SequenceEqual(pat)) return i;
+            bool match = true;
+            for (int j = 0; j < pat.Length; j++) {
+                if (src[i + j] != pat[j]) { match = false; break; }
+            }
+            if (match) return i;
         }
         return -1;
     }
 
     public static class Win32 {
         [DllImport("kernel32.dll", SetLastError = true)]
-        // Добавлен out int lpNumberOfBytesRead для совместимости с вызовом через out _
+        // ИСПРАВЛЕНО: Параметр out без значения по умолчанию (ошибка CS1741)
         public static extern bool ReadProcessMemory(IntPtr hProcess, ulong lpBaseAddress, [Out] byte[] lpBuffer, int dwSize, out int lpNumberOfBytesRead);
 
         [DllImport("kernel32.dll")]
         public static extern IntPtr OpenProcess(int dwDesiredAccess, bool bInheritHandle, int dwProcessId);
     }
 }
+
 
 
 
