@@ -396,16 +396,16 @@ public class Searcher
 
     public void SetFilePath(string path) => FilePath = path;
 
-    public string SearchEngineVersion()
+    public string SearchEngineVersion() => "4.18 - 4.27 (Auto)";
+
+    private bool IsValidBinaryKey(byte[] key)
     {
-        if (!string.IsNullOrEmpty(FilePath) && File.Exists(FilePath))
-        {
-            try { return FileVersionInfo.GetVersionInfo(FilePath).FileVersion ?? "4.18.1"; } catch { }
-        }
-        return "4.18.1"; 
+        if (key.All(b => b == 0) || key.All(b => b == 0xFF)) return false;
+        int unique = key.Distinct().Count();
+        // Снизил порог до 18, чтобы находить ключи в старых версиях (4.18/4.22)
+        return unique >= 18; 
     }
 
-    // Декодер для поиска адреса ключа в Android (.so)
     private long DecodeARM64(int adrpIdx)
     {
         uint adrp = BitConverter.ToUInt32(ProcessMemory, adrpIdx);
@@ -417,33 +417,20 @@ public class Searcher
         return (adrpIdx & ~0xFFF) + (imm << 12) + ((add >> 10) & 0xFFF);
     }
 
-    private bool IsValidBinaryKey(byte[] key)
-    {
-        if (key.All(b => b == 0)) return false;
-        int unique = key.Distinct().Count();
-        int printable = key.Count(b => b >= 32 && b <= 126);
-        // Настоящий ключ — это шум: много уникальных байт (22+), мало текста (<16 символов)
-        return unique >= 22 && printable < 16;
-    }
-
     public Dictionary<ulong, string> FindAllPattern(out long elapsedMilliseconds)
     {
         Stopwatch timer = Stopwatch.StartNew();
         var results = new Dictionary<ulong, string>();
         var seen = new HashSet<string>();
 
-        if (ProcessMemory == null || ProcessMemory.Length < 32)
-        {
-            elapsedMilliseconds = 0;
-            return results;
-        }
+        if (ProcessMemory == null || ProcessMemory.Length < 32) { elapsedMilliseconds = 0; return results; }
 
-        if (useUE4Lib) // --- ПОИСК ДЛЯ ANDROID (.so) ---
+        // --- СПОСОБ 1: Поиск через ADRP/ADD (Для новых версий Android) ---
+        if (useUE4Lib)
         {
             for (int i = 0; i < ProcessMemory.Length - 12; i += 4)
             {
-                // Ищем ADRP + ADD (инструкции загрузки адреса в ARM64)
-                if ((ProcessMemory[i + 3] & 0x9F) == 0x90 && (ProcessMemory[i + 7] & 0xBF) == 0x21)
+                if ((ProcessMemory[i + 3] & 0x9F) == 0x90) // Инструкция ADRP
                 {
                     try {
                         long addr = DecodeARM64(i);
@@ -456,7 +443,10 @@ public class Searcher
                 }
             }
         }
-        else // --- ПОИСК ДЛЯ WINDOWS ---
+
+        // --- СПОСОБ 2: Прямой поиск байт (Для 4.18.1, 4.22.3 и когда способ 1 не нашел) ---
+        // Если ключей 0, включаем "Грубую силу"
+        if (results.Count == 0)
         {
             for (int i = 0; i < ProcessMemory.Length - 32; i += 4)
             {
@@ -480,6 +470,6 @@ public class Searcher
     public static class Win32
     {
         [DllImport("kernel32.dll")]
-        public static extern bool ReadProcessMemory(IntPtr hProcess, ulong lpBaseAddress, [Out] byte[] lpBuffer, int dwSize, ref int lpNumberOfBytesRead);
+        public static extern bool ReadProcessMemory(IntPtr h, ulong b, byte[] buf, int s, ref int r);
     }
 }
