@@ -509,11 +509,12 @@ public class Searcher
     public static class Win32 {
         [DllImport("kernel32.dll", SetLastError = true)]
         // Добавлен out int lpNumberOfBytesRead для совместимости с вызовом через out _
-        public static extern bool ReadProcessMemory(IntPtr hProcess, ulong lpBaseAddress, [Out] byte[] lpBuffer, int dwSize, out int lpNumberOfBytesRead);
+        public static extern bool ReadProcessMemory(IntPtr hProcess, ulong lpBaseAddress, [Out] byte[] lpBuffer, int dwSize, out int lpNumberOfBytesRead = 0);
 
         [DllImport("kernel32.dll")]
         public static extern IntPtr OpenProcess(int dwDesiredAccess, bool bInheritHandle, int dwProcessId);
     }
 }
+
 
 
