@@ -567,86 +567,77 @@ public class Searcher
     }
 
     public Dictionary<ulong, string> FindAllPattern(out long elapsedMilliseconds)
-{
-    Stopwatch timer = Stopwatch.StartNew();
-    var offsets = new Dictionary<ulong, string>();
-
-    if (useUE4Lib)
     {
-        // ======================
-        // Android UE4 key search pattern
-        // ======================
-        for (int i = 0; i < ProcessMemory.Length - 12; i++)
+        Stopwatch timer = Stopwatch.StartNew();
+        var offsets = new Dictionary<ulong, string>();
+
+        if (useUE4Lib)
         {
-            if (ProcessMemory[i] != 0x01) continue;
-            if (ProcessMemory[i + 1] != 0x01) continue;
-            if (ProcessMemory[i + 2] != 0x40) continue;
-            if (ProcessMemory[i + 3] != 0xAD) continue;
-            if (ProcessMemory[i + 4] != 0x01) continue;
-            if (ProcessMemory[i + 5] != 0x00) continue;
-            if (ProcessMemory[i + 6] != 0x00) continue;
-            if (ProcessMemory[i + 7] != 0xAD) continue;
-            if (ProcessMemory[i + 8] != 0xC0) continue;
-            if (ProcessMemory[i + 9] != 0x03) continue;
-            if (ProcessMemory[i + 10] != 0x5F) continue;
-            if (ProcessMemory[i + 11] != 0xD6) continue;
-
-            int aesKeyAddr = GetADRLAddress(i - 8);
-            if (aesKeyAddr < 0 || aesKeyAddr + 32 > ProcessMemory.Length) continue;
-
-            string aesKey = BitConverter.ToString(ProcessMemory, aesKeyAddr, 32).Replace("-", "");
-            offsets.Add(AllocationBase + (ulong)aesKeyAddr, $"0x{aesKey}");
-
-            aesKeyAddr += 0x1000; // проверка корректности смещения для разных игр
-            if (aesKeyAddr + 32 > ProcessMemory.Length) continue;
-
-            aesKey = BitConverter.ToString(ProcessMemory, aesKeyAddr, 32).Replace("-", "");
-            offsets.Add(AllocationBase + (ulong)aesKeyAddr, $"0x{aesKey}");
-        }
-    }
-    else
-    {
-        // ======================
-        // Версия движка
-        // ======================
-        Version engineVersion = new Version(0, 0);
-        string versionStr = SearchEngineVersion();
-        if (!string.IsNullOrWhiteSpace(versionStr))
-        {
-            Version.TryParse(versionStr, out engineVersion);
-        }
-
-        if (engineVersion < new Version(4, 18))
-        {
-            // ======================
-            // Старый способ поиска ключа
-            // ======================
-            for (int i = 0; i < ProcessMemory.Length - 10; i++)
+            // Android UE4 key search pattern
+            for (int i = 0; i < ProcessMemory.Length - 12; i++)
             {
-                if (ProcessMemory[i] != 0x00 || ProcessMemory[i + 1] != 0x30 || ProcessMemory[i + 2] != 0x78) continue;
+                if (ProcessMemory[i] != 0x01) continue;
+                if (ProcessMemory[i + 1] != 0x01) continue;
+                if (ProcessMemory[i + 2] != 0x40) continue;
+                if (ProcessMemory[i + 3] != 0xAD) continue;
+                if (ProcessMemory[i + 4] != 0x01) continue;
+                if (ProcessMemory[i + 5] != 0x00) continue;
+                if (ProcessMemory[i + 6] != 0x00) continue;
+                if (ProcessMemory[i + 7] != 0xAD) continue;
+                if (ProcessMemory[i + 8] != 0xC0) continue;
+                if (ProcessMemory[i + 9] != 0x03) continue;
+                if (ProcessMemory[i + 10] != 0x5F) continue;
+                if (ProcessMemory[i + 11] != 0xD6) continue;
 
-                int start = i;
-                while (start > 0 && ProcessMemory[start - 1] == 0x00)
-                    start--;
+                int aesKeyAddr = GetADRLAddress(i - 8);
+                if (aesKeyAddr < 0 || aesKeyAddr + 32 > ProcessMemory.Length) continue;
 
-                if (start - 65 < 0 || ProcessMemory[start - 65] != 0x00) continue;
+                string aesKey = BitConverter.ToString(ProcessMemory, aesKeyAddr, 32).Replace("-", "");
+                offsets.Add(AllocationBase + (ulong)aesKeyAddr, $"0x{aesKey}");
 
-                string aesKey = Encoding.Default.GetString(ProcessMemory, start - 64, 64);
+                aesKeyAddr += 0x1000; // Необходимо проверить корректность смещения +0x1000 для разных игр
+                if (aesKeyAddr + 32 > ProcessMemory.Length) continue;
 
-                if (Regex.IsMatch(aesKey, @"^[a-zA-Z0-9]+$"))
-                {
-                    offsets.Add(AllocationBase + (ulong)(start - 64), aesKey);
-                    break;
-                }
+                aesKey = BitConverter.ToString(ProcessMemory, aesKeyAddr, 32).Replace("-", "");
+                offsets.Add(AllocationBase + (ulong)aesKeyAddr, $"0x{aesKey}");
             }
         }
         else
         {
-            // ======================
-            // Новый способ поиска ключа (Fortnite / UE4 4.18+)
-            // ======================
-            int verify_1 = 0xC7;
+            string EngineVersionStr = SearchEngineVersion();
+            int EngineVersion = 17;
+            if (!string.IsNullOrEmpty(EngineVersionStr))
+            {
+                string[] parts = EngineVersionStr.Split('.');
+                if (parts.Length > 1 && int.TryParse(parts[1], out int ver))
+                    EngineVersion = ver;
+            }
 
+            if (EngineVersion < 18)
+            {
+                // Старый способ поиска ключа
+                for (int i = 0; i < ProcessMemory.Length - 10; i++)
+                {
+                    if (ProcessMemory[i] != 0x00 || ProcessMemory[i + 1] != 0x30 || ProcessMemory[i + 2] != 0x78) continue;
+
+                    int start = i;
+                    while (start > 0 && ProcessMemory[start - 1] == 0x00)
+                        start--;
+
+                    if (start - 65 < 0 || ProcessMemory[start - 65] != 0x00) continue;
+
+                    string aesKey = Encoding.Default.GetString(ProcessMemory, start - 64, 64);
+
+                    if (Regex.IsMatch(aesKey, @"^[a-zA-Z0-9]+$"))
+                    {
+                        offsets.Add(AllocationBase + (ulong)(start - 64), aesKey);
+                        break;
+                    }
+                }
+            }
+
+            // Новый способ поиска ключа (например, для Fortnite и новых версий UE4)
+            int verify_1 = 0xC7;
             for (int i = 0; i < ProcessMemory.Length - 10; i++)
             {
                 try
@@ -736,8 +727,9 @@ public class Searcher
                             break;
                     }
 
-                    if (!invalid)
-                        offsets.Add(AllocationBase + (ulong)i, $"0x{aesKey}");
+                    if (invalid) continue;
+
+                    offsets.Add(AllocationBase + (ulong)i, $"0x{aesKey}");
                 }
                 catch
                 {
@@ -745,13 +737,11 @@ public class Searcher
                 }
             }
         }
+
+        timer.Stop();
+        elapsedMilliseconds = timer.ElapsedMilliseconds;
+        return offsets;
     }
-
-    timer.Stop();
-    elapsedMilliseconds = timer.ElapsedMilliseconds;
-    return offsets;
-}
-
 
     public static class Win32
     {
