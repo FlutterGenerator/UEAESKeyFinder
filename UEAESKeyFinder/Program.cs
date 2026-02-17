@@ -1,9 +1,10 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
-using System.Text;
-using System.Threading;
 using System.Runtime.InteropServices;
+using System.Threading;
+using static Searcher;
 
 namespace UEAesKeyFinder
 {
@@ -11,117 +12,184 @@ namespace UEAesKeyFinder
     {
         [DllImport("ntdll.dll", PreserveSig = false)]
         public static extern void NtSuspendProcess(IntPtr processHandle);
-
-        public static byte[] HexToBytes(string hex)
+        public static byte[] GetHex(string hex)
         {
-            if (hex.StartsWith("0x")) hex = hex.Substring(2);
             var r = new byte[hex.Length / 2];
-            for (int i = 0; i < r.Length; i++)
-                r[i] = Convert.ToByte(hex.Substring(i * 2, 2), 16);
+            for (var i = 0; i < r.Length; i++) r[i] = Convert.ToByte(hex.Substring(i * 2, 2), 16);
             return r;
         }
-
         static void Main(string[] args)
         {
             Searcher searcher = new Searcher();
-            Process game = null;
+            Process game = new Process();
 
-            Console.WriteLine("=== Unreal Engine AES Key Finder (Universal 4.18 - 4.27) ===");
-            Console.Write("0: Memory\n1: File (.exe)\n2: Dump File (.dmp/.bin)\n3: LibUE4.so File\n4: APK File\nSelect Method: ");
+            Console.Write("Please select from where you want to get the AES Key\n0: Memory\n1: File\n2: Dump File\n3. LibUE4.so File\n4. APK File\nUse: ");
+
             char method = (char)Console.Read();
-            Console.ReadLine();
-
             string path;
-            string saveName = "Result";
-
+            string EngineVersion = "4.18.0";
+            string saveName = "";
             switch (method)
             {
                 case '0':
-                    Console.Write("Enter Process Name or ID: ");
-                    string procInput = Console.ReadLine();
+                    Console.Write("Enter the name or id of the process: ");
+                    Console.Read();
+                    Console.Read();
+                    string ProcessName = Console.ReadLine();
+
                     bool found = false;
                     foreach (Process p in Process.GetProcesses())
                     {
-                        if (p.ProcessName.Equals(procInput, StringComparison.OrdinalIgnoreCase) || p.Id.ToString() == procInput)
+                        if (p.ProcessName == ProcessName || p.Id.ToString() == ProcessName)
                         {
-                            searcher = new Searcher(p);
+                            Console.WriteLine($"\nFound {p.ProcessName}");
                             saveName = p.ProcessName;
+                            searcher = new Searcher(p);
                             found = true;
                             break;
                         }
                     }
-                    if (!found) { ErrorExit("Process not found."); return; }
-                    break;
-
-                case '1':
-                case '2':
-                    Console.Write("Enter File Path: ");
-                    path = Console.ReadLine().Replace("\"", "");
-                    if (!File.Exists(path)) { ErrorExit("File not found."); return; }
-                    saveName = Path.GetFileName(path);
-                    if (method == '1')
+                    if (!found)
                     {
-                        game = Process.Start(path);
-                        Thread.Sleep(2000);
-                        try { NtSuspendProcess(game.Handle); } catch { }
-                        searcher = new Searcher(game);
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine("Failed to find the process.");
+                        Console.ReadLine();
+                        return;
                     }
-                    else
-                        searcher = new Searcher(File.ReadAllBytes(path));
-                    searcher.SetFilePath(path);
+                    EngineVersion = searcher.SearchEngineVersion();
+                    if (EngineVersion != "")
+                    {
+                        Console.WriteLine($"Engine Version: {EngineVersion}");
+                    }
                     break;
-
-                case '3':
-                    Console.Write("Enter libUE4.so Path: ");
+                case '1':
+                    Console.Write("Please enter the file path: ");
+                    Console.Read();
+                    Console.Read();
                     path = Console.ReadLine().Replace("\"", "");
-                    if (!File.Exists(path)) { ErrorExit("File not found."); return; }
-                    saveName = Path.GetFileName(path);
+                    if (!File.Exists(path))
+                    {
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine("Failed to find the dump file.");
+                        return;
+                    }
+
+                    saveName = path.Split("\\")[path.Split("\\").Length - 1];
+
+                    game = new Process() { StartInfo = { FileName = path } };
+                    game.Start();
+                    Thread.Sleep(1000);
+                    // Not required to fully load
+                    NtSuspendProcess(game.Handle);
+
+                    searcher = new Searcher(game);
+                    searcher.SetFilePath(path);
+                    EngineVersion = searcher.SearchEngineVersion();
+                    if (EngineVersion != "")
+                    {
+                        Console.WriteLine($"Engine Version: {EngineVersion}");
+                    }
+                    break;
+                case '2':
+                    Console.Write("Please enter the file path: ");
+                    Console.Read();
+                    Console.Read();
+                    path = Console.ReadLine().Replace("\"", "");
+                    if (!File.Exists(path))
+                    {
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine("Failed to find the dump file.");
+                        return;
+                    }
+
+                    saveName = path.Split("\\")[path.Split("\\").Length-1];
+
+                    searcher = new Searcher(File.ReadAllBytes(path));
+                    searcher.SetFilePath(path);
+                    EngineVersion = searcher.SearchEngineVersion();
+                    if (EngineVersion != "")
+                    {
+                        Console.WriteLine($"Engine Version: {EngineVersion}");
+                    }
+                    break;
+                case '3':
+                    Console.Write("Please enter the file path: ");
+                    Console.Read();
+                    Console.Read();
+                    path = Console.ReadLine().Replace("\"", "");
+
+                    saveName = path.Split("\\")[path.Split("\\").Length - 1];
+
+                    if (!File.Exists(path))
+                    {
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine("Failed to find the lib.");
+                        return;
+                    }
+
                     searcher = new Searcher(File.ReadAllBytes(path), true);
                     break;
-
                 case '4':
-                    Console.Write("Enter APK Path: ");
+                    Console.Write("Please enter the file path: ");
+                    Console.Read();
+                    Console.Read();
                     path = Console.ReadLine().Replace("\"", "");
-                    if (!File.Exists(path)) { ErrorExit("File not found."); return; }
-                    saveName = Path.GetFileName(path);
+
+                    saveName = path.Split("\\")[path.Split("\\").Length - 1];
+
+                    if (!File.Exists(path))
+                    {
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine("Failed to find the apk.");
+                        return;
+                    }
                     searcher = new Searcher(File.ReadAllBytes(path), true, true);
                     break;
-
-                default:
-                    ErrorExit("Invalid method."); return;
             }
 
-            Console.WriteLine("Searching for AES Key...");
-            string key = searcher.FindSingleKey(out long elapsed);
+            Dictionary<ulong, string> aesKeys = searcher.FindAllPattern(out long took);
 
-            if (!string.IsNullOrEmpty(key))
+            if (aesKeys.Count > 0)
             {
-                string base64Key = Convert.ToBase64String(HexToBytes(key));
-                Console.ForegroundColor = ConsoleColor.Green;
-                Console.WriteLine($"\n[+] AES Key Found ({elapsed} ms):\nHEX: {key}\nBase64: {base64Key}");
+                string WriteToFile = "";
+                string txt = aesKeys.Count == 1 ? $"Found {aesKeys.Count} AES Key in {took}ms\n" : $"Found {aesKeys.Count} AES Keys in {took}ms\n";
 
-                string fileName = $"{saveName}_AES_Key.txt";
-                File.WriteAllText(fileName, $"HEX: {key}\nBase64: {base64Key}");
-                Console.WriteLine($"\n[!] Key saved to: {fileName}");
+                WriteToFile += txt;
+
+                Console.ForegroundColor = ConsoleColor.Green;
+                Console.Write("\n" + txt);
+                Console.ForegroundColor = ConsoleColor.White;
+                int EngineVersionI = 17;
+                if (EngineVersion != "") EngineVersionI = Convert.ToInt32(EngineVersion.Split(".")[1]);
+                if (EngineVersionI < 18)
+                {
+                    foreach (KeyValuePair<ulong, string> o in aesKeys)
+                    {
+                        txt = $"{aesKeys[o.Key]} at {o.Key}\n";
+                        Console.Write(txt);
+                        WriteToFile += txt;
+                    };
+                }
+                else
+                {
+                    foreach (KeyValuePair<ulong, string> o in aesKeys)
+                    {
+                        txt = $"{aesKeys[o.Key]} ({System.Convert.ToBase64String(GetHex(aesKeys[o.Key][2..aesKeys[o.Key].Length]))}) at {o.Key}\n";
+                        Console.Write(txt);
+                        WriteToFile += txt;
+                    };
+                }
+
+                File.WriteAllText(saveName + "_aes_keys.txt", WriteToFile);
             }
             else
             {
                 Console.ForegroundColor = ConsoleColor.Red;
-                Console.WriteLine("\n[-] No AES Key found.");
+                Console.WriteLine("\nFailed to find any AES Keys.");
             }
 
-            if (method == '1' && game != null) try { game.Kill(); } catch { }
+            if (method == '1') try { game.Kill(); } catch { };
 
-            Console.ResetColor();
-            Console.WriteLine("\nPress Enter to exit...");
-            Console.ReadLine();
-        }
-
-        static void ErrorExit(string message)
-        {
-            Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine($"\nError: {message}");
-            Console.ResetColor();
             Console.ReadLine();
         }
     }
