@@ -1,6 +1,9 @@
 # AES Keys for SpecialForcesGroup2
 
-## Closed Alpha
 | Version           | Key                                                                   |
 | ----------------- | --------------------------------------------------------------------- |
 | 4.21              | 0xB96978E155ECC391708269C2759E867B7D6C01F12B6DB51AE021A4E7B9A4F8A0    |
+| 4.2              | 0xB96978E155ECC391708269C2759E867B7D6C01F12B6DB51AE021A4E7B9A4F8A0    |
+| 4.1              | 0xB96978E155ECC391708269C2759E867B7D6C01F12B6DB51AE021A4E7B9A4F8A0    |
+| 4.0              | 0xB96978E155ECC391708269C2759E867B7D6C01F12B6DB51AE021A4E7B9A4F8A0    |
+| 3.9              | 0xF4BB36029496A4B5AE4D96E7AB2CAB086C19F3C7E4B000289022D963B145B167    |
