@@ -378,7 +378,6 @@ public class Searcher
 
     public Searcher() { }
 
-    // Конструктор для сканирования запущенного процесса
     public Searcher(Process p)
     {
         Process = p;
@@ -389,24 +388,20 @@ public class Searcher
         Win32.ReadProcessMemory(hProcess, AllocationBase, ProcessMemory, ProcessMemory.Length, ref bytesRead);
     }
 
-    // Конструктор для сканирования массива байт (файла)
     public Searcher(byte[] bytes)
     {
         AllocationBase = 0;
         ProcessMemory = bytes;
     }
 
-    // Конструктор для Android / APK
     public Searcher(byte[] bytes, bool useAndroid, bool isAPK = false)
     {
         ProcessMemory = bytes;
         useUE4Lib = useAndroid;
-        // (Логика APK упрощена для совместимости, при необходимости добавьте сюда распаковку)
     }
 
     public void SetFilePath(string path) => FilePath = path;
 
-    // Метод для получения версии движка (исправляет ошибки CS1061)
     public string SearchEngineVersion()
     {
         if (!string.IsNullOrEmpty(FilePath) && File.Exists(FilePath))
@@ -414,9 +409,7 @@ public class Searcher
             try { return FileVersionInfo.GetVersionInfo(FilePath).FileVersion ?? "4.18.1"; } catch { }
         }
 
-        // Поиск строки версии в памяти (Unicode паттерн "ProductVersion")
         byte[] ProductVersion = new byte[] { 0x50, 0x00, 0x72, 0x00, 0x6F, 0x00, 0x64, 0x00, 0x75, 0x00, 0x63, 0x00, 0x74, 0x00, 0x56, 0x00, 0x65, 0x00, 0x72, 0x00, 0x73, 0x00, 0x69, 0x00, 0x6F, 0x00, 0x6E, 0x00 };
-        
         for (int i = 0; i < ProcessMemory.Length - 50; i++)
         {
             bool match = true;
@@ -424,31 +417,24 @@ public class Searcher
             {
                 if (ProcessMemory[i + j] != ProductVersion[j]) { match = false; break; }
             }
-            if (match)
-            {
-                return Encoding.Unicode.GetString(ProcessMemory, i + ProductVersion.Length + 4, 12).Trim();
-            }
+            if (match) return Encoding.Unicode.GetString(ProcessMemory, i + ProductVersion.Length + 4, 12).Trim();
         }
         return "4.18.1"; 
     }
 
-    private bool IsHex(byte b) => (b >= 48 && b <= 57) || (b >= 65 && b <= 70) || (b >= 97 && b <= 102);
-
-    public int FollowJMP(int addr)
+    // Вспомогательный метод для ARM64 (Android .so)
+    private long DecodeADRP(int offset, byte[] instr)
     {
-        if (addr < 0 || addr + 5 > ProcessMemory.Length) return addr;
-        int offset = BitConverter.ToInt32(ProcessMemory, addr + 1);
-        int newAddr = addr + offset + 5;
-        if (newAddr > 0 && newAddr + 5 < ProcessMemory.Length && ProcessMemory[newAddr] == 0x0F && ProcessMemory[newAddr + 4] == 0xE9)
-            return FollowJMP(newAddr + 4);
-        return newAddr;
+        long immhi = (BitConverter.ToUInt32(instr, offset) >> 5) & 0x7FFFF;
+        long immlo = (BitConverter.ToUInt32(instr, offset) >> 29) & 0x3;
+        long imm = (immhi << 2) | immlo;
+        if ((imm & 0x100000) != 0) imm |= ~0xFFFFF;
+        return imm << 12;
     }
 
-    // Валидация найденного ключа (для 4.18.1 и выше)
     private bool IsValidBinaryKey(byte[] key)
     {
-        int unique = 0;
-        int zeros = 0;
+        int unique = 0; int zeros = 0;
         for (int i = 0; i < key.Length; i++)
         {
             if (key[i] == 0) zeros++;
@@ -468,53 +454,70 @@ public class Searcher
             return offsets;
         }
 
-        // --- 1. БИНАРНЫЙ ПОИСК (Универсальный для 4.18.1 - 4.24) ---
-        for (int i = 0; i < ProcessMemory.Length - 32; i += 4)
+        // --- ЛОГИКА ДЛЯ ANDROID (.so библиотеки) ---
+        if (useUE4Lib)
         {
-            byte[] potentialKey = new byte[32];
-            Array.Copy(ProcessMemory, i, potentialKey, 0, 32);
-            if (IsValidBinaryKey(potentialKey))
+            for (int i = 0; i < ProcessMemory.Length - 20; i += 4)
             {
-                string hexKey = BitConverter.ToString(potentialKey).Replace("-", "");
-                if (!offsets.ContainsValue("0x" + hexKey))
-                    offsets[AllocationBase + (ulong)i] = "0x" + hexKey;
+                // Поиск паттерна ADRP + ADD (ARM64)
+                if ((ProcessMemory[i + 3] & 0x9F) == 0x90 && (ProcessMemory[i + 7] & 0xFF) == 0x11)
+                {
+                    try {
+                        long adrpImm = DecodeADRP(i, ProcessMemory);
+                        uint addImm = (BitConverter.ToUInt32(ProcessMemory, i + 4) >> 10) & 0xFFF;
+                        long targetAddr = (long)((i & ~0xFFF) + adrpImm + addImm);
+
+                        if (targetAddr > 0 && targetAddr < ProcessMemory.Length - 32)
+                        {
+                            byte[] key = new byte[32];
+                            Array.Copy(ProcessMemory, (int)targetAddr, key, 0, 32);
+                            if (IsValidBinaryKey(key))
+                            {
+                                string hexKey = BitConverter.ToString(key).Replace("-", "");
+                                offsets[(ulong)targetAddr] = "0x" + hexKey;
+                            }
+                        }
+                    } catch { }
+                }
             }
         }
-
-        // --- 2. ПОИСК ПО ИНСТРУКЦИЯМ MOV (Для 4.25 - 5.4+) ---
-        int verify_1 = 0xC7;
-        for (int i = 5; i < ProcessMemory.Length - 100; i++)
+        else // --- ЛОГИКА ДЛЯ WINDOWS (.exe) ---
         {
-            if (ProcessMemory[i] != verify_1) continue;
-            
-            byte reg = ProcessMemory[i + 1];
-            // Проверяем паттерны записи в стек/регистры (RBP, RSP, RCX и др.)
-            if (reg == 0x45 || reg == 0x44 || reg == 0x01 || reg == 0x81)
+            // 1. Бинарный поиск (4.18 - 4.24)
+            for (int i = 0; i < ProcessMemory.Length - 32; i += 4)
             {
-                try
+                byte[] potentialKey = new byte[32];
+                Array.Copy(ProcessMemory, i, potentialKey, 0, 32);
+                if (IsValidBinaryKey(potentialKey))
                 {
-                    int addr = i;
-                    string aesKey = "";
-                    int currentStep = i;
-                    
-                    // Пытаемся собрать 8 частей по 4 байта (32 байта / 256 бит)
-                    for (int part = 0; part < 8; part++)
-                    {
-                        if (ProcessMemory[currentStep] == 0xC7)
-                        {
-                            int valOffset = (ProcessMemory[currentStep + 1] == 0x45 || ProcessMemory[currentStep + 1] == 0x44) ? 6 : 2;
-                            aesKey += BitConverter.ToString(ProcessMemory, currentStep + valOffset, 4).Replace("-", "");
-                            currentStep += (valOffset + 4);
-                        }
-                    }
+                    string hexKey = BitConverter.ToString(potentialKey).Replace("-", "");
+                    if (!offsets.ContainsValue("0x" + hexKey))
+                        offsets[AllocationBase + (ulong)i] = "0x" + hexKey;
+                }
+            }
 
-                    if (aesKey.Length == 64)
+            // 2. MOV поиск (4.25 - UE5)
+            for (int i = 5; i < ProcessMemory.Length - 100; i++)
+            {
+                if (ProcessMemory[i] == 0xC7)
+                {
+                    byte reg = ProcessMemory[i + 1];
+                    if (reg == 0x45 || reg == 0x44 || reg == 0x01 || reg == 0x81)
                     {
-                        if (!offsets.ContainsValue("0x" + aesKey))
-                            offsets[AllocationBase + (ulong)i] = "0x" + aesKey;
+                        try {
+                            string aesKey = "";
+                            int step = i;
+                            for (int p = 0; p < 8; p++) {
+                                if (ProcessMemory[step] == 0xC7) {
+                                    int off = (ProcessMemory[step + 1] == 0x45 || ProcessMemory[step + 1] == 0x44) ? 6 : 2;
+                                    aesKey += BitConverter.ToString(ProcessMemory, step + off, 4).Replace("-", "");
+                                    step += (off + 4);
+                                }
+                            }
+                            if (aesKey.Length == 64) offsets[AllocationBase + (ulong)i] = "0x" + aesKey;
+                        } catch { }
                     }
                 }
-                catch { }
             }
         }
 
@@ -529,3 +532,4 @@ public class Searcher
         public static extern bool ReadProcessMemory(IntPtr hProcess, ulong lpBaseAddress, [Out] byte[] lpBuffer, int dwSize, ref int lpNumberOfBytesRead);
     }
 }
+
