@@ -571,5 +571,13 @@ public class Searcher
         [DllImport("kernel32.dll")]
         public static extern bool ReadProcessMemory(IntPtr hProcess, ulong lpBaseAddress, [Out] byte[] lpBuffer, int dwSize, int lpNumberOfBytesRead = 0);
     }
-}
+    public void SetFilePath(string path)
+    {
+        FilePath = path;
+    }
 
+    public string SearchEngineVersion()
+    {
+        return "";
+    }
+}
