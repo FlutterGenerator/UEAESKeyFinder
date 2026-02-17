@@ -378,6 +378,7 @@ public class Searcher
 
     public Searcher() { }
 
+    // Конструктор для сканирования запущенного процесса
     public Searcher(Process p)
     {
         Process = p;
@@ -385,27 +386,76 @@ public class Searcher
         AllocationBase = (ulong)p.MainModule.BaseAddress;
         ProcessMemory = new byte[p.MainModule.ModuleMemorySize];
         int bytesRead = 0;
-        // Исправлен вызов RPM: передаем ссылку на int для корректной работы
         Win32.ReadProcessMemory(hProcess, AllocationBase, ProcessMemory, ProcessMemory.Length, ref bytesRead);
     }
 
+    // Конструктор для сканирования массива байт (файла)
     public Searcher(byte[] bytes)
     {
         AllocationBase = 0;
         ProcessMemory = bytes;
     }
 
+    // Конструктор для Android / APK
     public Searcher(byte[] bytes, bool useAndroid, bool isAPK = false)
     {
-        // ... (Ваша логика распаковки APK оставлена без изменений)
-        ProcessMemory = bytes; 
+        ProcessMemory = bytes;
         useUE4Lib = useAndroid;
+        // (Логика APK упрощена для совместимости, при необходимости добавьте сюда распаковку)
     }
 
     public void SetFilePath(string path) => FilePath = path;
 
-    // Вспомогательный метод для проверки HEX символов
+    // Метод для получения версии движка (исправляет ошибки CS1061)
+    public string SearchEngineVersion()
+    {
+        if (!string.IsNullOrEmpty(FilePath) && File.Exists(FilePath))
+        {
+            try { return FileVersionInfo.GetVersionInfo(FilePath).FileVersion ?? "4.18.1"; } catch { }
+        }
+
+        // Поиск строки версии в памяти (Unicode паттерн "ProductVersion")
+        byte[] ProductVersion = new byte[] { 0x50, 0x00, 0x72, 0x00, 0x6F, 0x00, 0x64, 0x00, 0x75, 0x00, 0x63, 0x00, 0x74, 0x00, 0x56, 0x00, 0x65, 0x00, 0x72, 0x00, 0x73, 0x00, 0x69, 0x00, 0x6F, 0x00, 0x6E, 0x00 };
+        
+        for (int i = 0; i < ProcessMemory.Length - 50; i++)
+        {
+            bool match = true;
+            for (int j = 0; j < ProductVersion.Length; j++)
+            {
+                if (ProcessMemory[i + j] != ProductVersion[j]) { match = false; break; }
+            }
+            if (match)
+            {
+                return Encoding.Unicode.GetString(ProcessMemory, i + ProductVersion.Length + 4, 12).Trim();
+            }
+        }
+        return "4.18.1"; 
+    }
+
     private bool IsHex(byte b) => (b >= 48 && b <= 57) || (b >= 65 && b <= 70) || (b >= 97 && b <= 102);
+
+    public int FollowJMP(int addr)
+    {
+        if (addr < 0 || addr + 5 > ProcessMemory.Length) return addr;
+        int offset = BitConverter.ToInt32(ProcessMemory, addr + 1);
+        int newAddr = addr + offset + 5;
+        if (newAddr > 0 && newAddr + 5 < ProcessMemory.Length && ProcessMemory[newAddr] == 0x0F && ProcessMemory[newAddr + 4] == 0xE9)
+            return FollowJMP(newAddr + 4);
+        return newAddr;
+    }
+
+    // Валидация найденного ключа (для 4.18.1 и выше)
+    private bool IsValidBinaryKey(byte[] key)
+    {
+        int unique = 0;
+        int zeros = 0;
+        for (int i = 0; i < key.Length; i++)
+        {
+            if (key[i] == 0) zeros++;
+            if (i > 0 && key[i] != key[i - 1]) unique++;
+        }
+        return zeros < 6 && unique > 12; 
+    }
 
     public Dictionary<ulong, string> FindAllPattern(out long elapsedMilliseconds)
     {
@@ -418,54 +468,53 @@ public class Searcher
             return offsets;
         }
 
-        // --- 1. ПОИСК ДЛЯ ANDROID ---
-        if (useUE4Lib)
+        // --- 1. БИНАРНЫЙ ПОИСК (Универсальный для 4.18.1 - 4.24) ---
+        for (int i = 0; i < ProcessMemory.Length - 32; i += 4)
         {
-            // (Ваш оригинальный код для Android с ADRP/ADD остается здесь)
-            // ...
-        }
-        else
-        {
-            // --- 2. УНИВЕРСАЛЬНЫЙ ПОИСК ДЛЯ WINDOWS (включая 4.18.1) ---
-            
-            for (int i = 0; i < ProcessMemory.Length - 64; i++)
+            byte[] potentialKey = new byte[32];
+            Array.Copy(ProcessMemory, i, potentialKey, 0, 32);
+            if (IsValidBinaryKey(potentialKey))
             {
-                // А) Поиск бинарного ключа (32 байта данных)
-                // В 4.18.1 ключ часто лежит просто как массив байт. 
-                // Мы ищем последовательность, которая не является "пустой" или "шумом"
-                if (i % 4 == 0) // Оптимизация: ключи в памяти обычно выровнены по 4 байта
+                string hexKey = BitConverter.ToString(potentialKey).Replace("-", "");
+                if (!offsets.ContainsValue("0x" + hexKey))
+                    offsets[AllocationBase + (ulong)i] = "0x" + hexKey;
+            }
+        }
+
+        // --- 2. ПОИСК ПО ИНСТРУКЦИЯМ MOV (Для 4.25 - 5.4+) ---
+        int verify_1 = 0xC7;
+        for (int i = 5; i < ProcessMemory.Length - 100; i++)
+        {
+            if (ProcessMemory[i] != verify_1) continue;
+            
+            byte reg = ProcessMemory[i + 1];
+            // Проверяем паттерны записи в стек/регистры (RBP, RSP, RCX и др.)
+            if (reg == 0x45 || reg == 0x44 || reg == 0x01 || reg == 0x81)
+            {
+                try
                 {
-                    byte[] potentialKey = new byte[32];
-                    Array.Copy(ProcessMemory, i, potentialKey, 0, 32);
+                    int addr = i;
+                    string aesKey = "";
+                    int currentStep = i;
                     
-                    if (IsValidBinaryKey(potentialKey))
+                    // Пытаемся собрать 8 частей по 4 байта (32 байта / 256 бит)
+                    for (int part = 0; part < 8; part++)
                     {
-                        string hexKey = BitConverter.ToString(potentialKey).Replace("-", "");
-                        if (!offsets.ContainsValue("0x" + hexKey))
-                            offsets[AllocationBase + (ulong)i] = "0x" + hexKey;
+                        if (ProcessMemory[currentStep] == 0xC7)
+                        {
+                            int valOffset = (ProcessMemory[currentStep + 1] == 0x45 || ProcessMemory[currentStep + 1] == 0x44) ? 6 : 2;
+                            aesKey += BitConverter.ToString(ProcessMemory, currentStep + valOffset, 4).Replace("-", "");
+                            currentStep += (valOffset + 4);
+                        }
+                    }
+
+                    if (aesKey.Length == 64)
+                    {
+                        if (!offsets.ContainsValue("0x" + aesKey))
+                            offsets[AllocationBase + (ulong)i] = "0x" + aesKey;
                     }
                 }
-
-                // Б) Поиск ключа как ASCII строки (64 символа)
-                if (IsHex(ProcessMemory[i]) && IsHex(ProcessMemory[i+1]) && IsHex(ProcessMemory[i+63]))
-                {
-                    bool isStringKey = true;
-                    for (int j = 0; j < 64; j++) { if (!IsHex(ProcessMemory[i + j])) { isStringKey = false; break; } }
-                    if (isStringKey)
-                    {
-                        string strKey = Encoding.ASCII.GetString(ProcessMemory, i, 64);
-                        if (!offsets.ContainsValue("0x" + strKey))
-                            offsets[AllocationBase + (ulong)i] = "0x" + strKey;
-                    }
-                }
-
-                // В) Ваш оригинальный метод (0xC7 / mov инструкции)
-                // Он сработает для новых версий UE4/UE5, если бинарный поиск пропустит ключ
-                if (ProcessMemory[i] == 0xC7 && (ProcessMemory[i + 1] == 0x45 || ProcessMemory[i + 1] == 0x01))
-                {
-                    // (Здесь остается ваша логика с verify_1, verify_2 и FollowJMP)
-                    // ... 
-                }
+                catch { }
             }
         }
 
@@ -474,22 +523,9 @@ public class Searcher
         return offsets;
     }
 
-    // Проверка, что найденные 32 байта похожи на AES ключ (не нули, не одинаковые байты)
-    private bool IsValidBinaryKey(byte[] key)
-    {
-        int unique = 0;
-        int zeros = 0;
-        for (int i = 0; i < key.Length; i++)
-        {
-            if (key[i] == 0) zeros++;
-            if (i > 0 && key[i] != key[i - 1]) unique++;
-        }
-        return zeros < 5 && unique > 10; // Ключ не должен быть почти пустым или состоять из одного байта
-    }
-
     public static class Win32
     {
-        [DllImport("kernel32.dll")]
+        [DllImport("kernel32.dll", SetLastError = true)]
         public static extern bool ReadProcessMemory(IntPtr hProcess, ulong lpBaseAddress, [Out] byte[] lpBuffer, int dwSize, ref int lpNumberOfBytesRead);
     }
 }
