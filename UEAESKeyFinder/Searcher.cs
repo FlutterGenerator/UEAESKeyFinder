@@ -378,10 +378,14 @@ namespace UEAesKeyFinder
 
         public Searcher(Process p)
         {
-            BaseAddr = (ulong)p.MainModule.BaseAddress;
-            Data = new byte[p.MainModule.ModuleMemorySize];
-            int read = 0;
-            ReadProcessMemory(p.Handle, BaseAddr, Data, Data.Length, ref read);
+            try {
+                BaseAddr = (ulong)p.MainModule.BaseAddress;
+                Data = new byte[p.MainModule.ModuleMemorySize];
+                int read = 0;
+                ReadProcessMemory(p.Handle, BaseAddr, Data, Data.Length, ref read);
+            } catch (Exception ex) {
+                throw new Exception($"Failed to read process memory: {ex.Message}");
+            }
         }
 
         [DllImport("kernel32.dll")]
@@ -391,13 +395,12 @@ namespace UEAesKeyFinder
         {
             using (ZipArchive zip = ZipFile.OpenRead(path))
             {
-                // Поиск основной библиотеки Unreal Engine в папках для 64-битных систем
                 var entry = zip.Entries
                     .Where(e => e.FullName.EndsWith(".so") && (e.FullName.Contains("arm64") || e.FullName.Contains("v8a")))
                     .OrderByDescending(e => e.Length)
                     .FirstOrDefault();
 
-                if (entry == null) throw new Exception("Could not find libUE4.so (arm64) inside the APK!");
+                if (entry == null) throw new Exception("libUE4.so not found in APK!");
 
                 using (var s = entry.Open())
                 using (var ms = new MemoryStream())
@@ -410,10 +413,15 @@ namespace UEAesKeyFinder
 
         private bool IsValidKey(byte[] k)
         {
+            // Отсекаем пустые или забитые одним цветом блоки
             if (k.All(b => b == 0) || k.All(b => b == 0xFF)) return false;
+
+            // Считаем уникальные байты (энтропия)
             int unique = k.Distinct().Count();
-            // Порог энтропии: 17 уникальных байт из 32 — стандарт для ключей UE 4.18 - 5.4
-            return unique >= 17; 
+
+            // В реальном AES ключе должно быть много разных байтов (обычно > 20)
+            // Если поставить 17, будет много мусора. 21 — золотая середина.
+            return unique >= 21; 
         }
 
         private long DecodeARM64(int i)
@@ -437,12 +445,12 @@ namespace UEAesKeyFinder
             var res = new Dictionary<ulong, string>();
             var seen = new HashSet<string>();
 
-            // ШАГ 1: Поиск по инструкциям (Android ADRP/ADD для версий 4.25 - 5.4)
+            // ШАГ 1: Поиск по инструкциям (Для Android .so)
             if (isAndroid)
             {
                 for (int i = 0; i < Data.Length - 12; i += 4)
                 {
-                    if ((Data[i + 3] & 0x9F) == 0x90) // Проверка опкода ADRP
+                    if ((Data[i + 3] & 0x9F) == 0x90) // Опкод ADRP
                     {
                         long addr = DecodeARM64(i);
                         if (addr > 0 && addr < Data.Length - 32)
@@ -455,18 +463,20 @@ namespace UEAesKeyFinder
                 }
             }
 
-            // ШАГ 2: Глубокое бинарное сканирование (ПК и старые версии Android 4.18 - 4.24)
-            if (res.Count == 0)
+            // ШАГ 2: Глубокое сканирование (Для ПК и старых версий)
+            // Сканируем с шагом 4 байта (выравнивание), чтобы не ловить дубли
+            if (res.Count == 0 || !isAndroid)
             {
-                for (int i = 0; i < Data.Length - 32; i++)
+                for (int i = 0; i < Data.Length - 32; i += 4)
                 {
                     if (Data[i] == 0x00 || Data[i] == 0xFF) continue;
+
                     byte[] k = new byte[32];
                     Buffer.BlockCopy(Data, i, k, 0, 32);
                     if (IsValidKey(k))
                     {
                         Add(res, seen, BaseAddr + (ulong)i, k);
-                        i += 31; // Пропускаем длину найденного ключа
+                        i += 28; // Прыгаем вперед, чтобы не сканировать тот же ключ
                     }
                 }
             }
@@ -483,4 +493,3 @@ namespace UEAesKeyFinder
         }
     }
 }
-
