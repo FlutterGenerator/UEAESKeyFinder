@@ -366,7 +366,7 @@ using System.IO.Compression;
 using System.Text;
 using System.Runtime.InteropServices;
 using System.Linq;
-using System.Text.RegularExpressions; // ИСПРАВЛЕНО: Добавлено для работы Regex
+using System.Text.RegularExpressions;
 
 public class Searcher
 {
@@ -395,7 +395,6 @@ public class Searcher
         {
             int bytesToRead = Math.Min(4096, ProcessMemory.Length - i);
             byte[] buffer = new byte[bytesToRead];
-            // Исправлено: Работает с out int в Win32
             if (Win32.ReadProcessMemory(hProcess, AllocationBase + (ulong)i, buffer, bytesToRead, out _))
             {
                 Buffer.BlockCopy(buffer, 0, ProcessMemory, i, bytesToRead);
@@ -435,7 +434,6 @@ public class Searcher
         if (!string.IsNullOrEmpty(FilePath) && File.Exists(FilePath))
             return FileVersionInfo.GetVersionInfo(FilePath).FileVersion;
         
-        // ИСПРАВЛЕНО: Безопасное чтение версии без OutOfMemory
         try {
             int checkLength = Math.Min(ProcessMemory.Length, 5000000); 
             string memStr = Encoding.ASCII.GetString(ProcessMemory, 0, checkLength);
@@ -444,10 +442,27 @@ public class Searcher
         } catch { return "4.18.1"; }
     }
 
+    // НОВЫЙ МЕТОД: Проверяет, похожи ли байты на реальный AES ключ
+    private bool IsValidKey(byte[] key)
+    {
+        if (key == null || key.Length != 32) return false;
+        
+        // 1. Убираем ключи, состоящие только из нулей или одинаковых байт
+        int distinct = key.Distinct().Count();
+        if (distinct < 8) return false;
+
+        // 2. Убираем ключи, которые выглядят как обычный текст (слишком много ASCII символов)
+        int asciiCount = key.Count(b => b >= 32 && b <= 126);
+        if (asciiCount > 25) return false;
+
+        return true;
+    }
+
     public Dictionary<ulong, string> FindAllPattern(out long elapsed)
     {
         Stopwatch sw = Stopwatch.StartNew();
         var results = new Dictionary<ulong, string>();
+        var seenKeys = new HashSet<string>(); // Чтобы не дублировать одинаковые ключи
 
         if (useUE4Lib)
         {
@@ -456,7 +471,17 @@ public class Searcher
                 if (ProcessMemory[i] == 0x01 && ProcessMemory[i+1] == 0x01) {
                     int addr = GetADRLAddress(i);
                     if (addr > 0 && addr + 32 <= ProcessMemory.Length)
-                        results[AllocationBase + (ulong)addr] = "0x" + BitConverter.ToString(ProcessMemory, addr, 32).Replace("-", "");
+                    {
+                        byte[] potentialKey = new byte[32];
+                        Buffer.BlockCopy(ProcessMemory, addr, potentialKey, 0, 32);
+
+                        if (IsValidKey(potentialKey))
+                        {
+                            string hex = "0x" + BitConverter.ToString(potentialKey).Replace("-", "");
+                            if (seenKeys.Add(hex)) // Добавляем только если такого ключа еще не было
+                                results[AllocationBase + (ulong)addr] = hex;
+                        }
+                    }
                 }
             }
         }
@@ -469,14 +494,24 @@ public class Searcher
                     StringBuilder sb = new StringBuilder();
                     int curr = i;
                     bool fail = false;
+                    byte[] keyBuffer = new byte[32];
+                    
                     for (int j = 0; j < 8; j++)
                     {
                         if (curr + 7 > ProcessMemory.Length || ProcessMemory[curr] != 0xC7) { fail = true; break; }
-                        sb.Append(BitConverter.ToString(ProcessMemory, curr + 3, 4).Replace("-", ""));
+                        byte[] part = new byte[4];
+                        Buffer.BlockCopy(ProcessMemory, curr + 3, part, 0, 4);
+                        Buffer.BlockCopy(part, 0, keyBuffer, j * 4, 4);
                         curr += 7; 
                         if (curr < ProcessMemory.Length && ProcessMemory[curr] == 0xE9) curr = FollowJMP(curr);
                     }
-                    if (!fail && sb.Length == 64) results[AllocationBase + (ulong)i] = "0x" + sb.ToString();
+                    
+                    if (!fail && IsValidKey(keyBuffer))
+                    {
+                        string hex = "0x" + BitConverter.ToString(keyBuffer).Replace("-", "");
+                        if (seenKeys.Add(hex))
+                            results[AllocationBase + (ulong)i] = hex;
+                    }
                 }
             }
         }
@@ -513,13 +548,12 @@ public class Searcher
 
     public static class Win32 {
         [DllImport("kernel32.dll", SetLastError = true)]
-        // ИСПРАВЛЕНО: Параметр out без значения по умолчанию (ошибка CS1741)
         public static extern bool ReadProcessMemory(IntPtr hProcess, ulong lpBaseAddress, [Out] byte[] lpBuffer, int dwSize, out int lpNumberOfBytesRead);
-
         [DllImport("kernel32.dll")]
         public static extern IntPtr OpenProcess(int dwDesiredAccess, bool bInheritHandle, int dwProcessId);
     }
 }
+
 
 
 
