@@ -4,6 +4,9 @@ using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading;
+using System.Text;
+// Добавлено для поддержки LINQ на всякий случай
+using System.Linq; 
 
 namespace UEAesKeyFinder
 {
@@ -25,7 +28,7 @@ namespace UEAesKeyFinder
             Searcher searcher = new Searcher();
             Process game = null;
 
-            Console.WriteLine("AES Key Finder (PC/Android)");
+            Console.WriteLine("=== UE AES Key Finder ===");
             Console.Write("0: Memory\n1: File\n2: Dump\n3: LibUE4.so\n4: APK\nUse: ");
             
             char method = Console.ReadKey().KeyChar;
@@ -40,7 +43,17 @@ namespace UEAesKeyFinder
                     case '0':
                         Console.Write("Enter process name: ");
                         string procName = Console.ReadLine();
-                        Process target = Process.GetProcesses().FirstOrDefault(p => p.ProcessName.Contains(procName));
+                        Process target = null;
+                        // Замена FirstOrDefault на обычный цикл для избежания ошибок
+                        foreach (Process p in Process.GetProcesses())
+                        {
+                            if (p.ProcessName.IndexOf(procName, StringComparison.OrdinalIgnoreCase) >= 0)
+                            {
+                                target = p;
+                                break;
+                            }
+                        }
+                        
                         if (target == null) throw new Exception("Process not found");
                         searcher = new Searcher(target);
                         saveName = target.ProcessName;
@@ -60,6 +73,7 @@ namespace UEAesKeyFinder
                     case '4':
                         Console.Write("Enter file path: ");
                         path = Console.ReadLine().Replace("\"", "");
+                        if (!File.Exists(path)) throw new Exception("File not found at path: " + path);
                         bool isAndroid = (method == '3' || method == '4');
                         searcher = new Searcher(File.ReadAllBytes(path), isAndroid, method == '4');
                         searcher.SetFilePath(path);
@@ -75,21 +89,22 @@ namespace UEAesKeyFinder
                 Console.WriteLine($"\nFound {keys.Count} keys in {took}ms:");
                 Console.ResetColor();
 
-                string writeToFile = "";
+                StringBuilder writeToFile = new StringBuilder();
                 foreach (var k in keys)
                 {
-                    string b64 = Convert.ToBase64String(GetHex(k.Value));
-                    string output = $"{k.Value} ({b64}) at {k.Key}";
+                    string hexOnly = k.Value.StartsWith("0x") ? k.Value.Substring(2) : k.Value;
+                    string b64 = Convert.ToBase64String(GetHex(hexOnly));
+                    string output = $"{k.Value} ({b64}) at 0x{k.Key:X}";
                     Console.WriteLine(output);
-                    writeToFile += output + Environment.NewLine;
+                    writeToFile.AppendLine(output);
                 }
 
-                File.WriteAllText(saveName + "_aes.txt", writeToFile);
+                File.WriteAllText(saveName + "_aes.txt", writeToFile.ToString());
             }
             catch (Exception ex) { Console.WriteLine("Error: " + ex.Message); }
 
             if (game != null) try { game.Kill(); } catch { }
-            Console.WriteLine("\nDone. Press Enter.");
+            Console.WriteLine("\nDone. Press Enter to exit.");
             Console.ReadLine();
         }
     }
