@@ -379,10 +379,7 @@ public class Searcher
 
     public Searcher() { }
 
-    public void SetFilePath(string path)
-    {
-        FilePath = path;
-    }
+    public void SetFilePath(string path) => FilePath = path;
 
     public Searcher(Process p)
     {
@@ -422,10 +419,7 @@ public class Searcher
                 ProcessMemory = output.ToArray();
             }
         }
-        else
-        {
-            ProcessMemory = bytes;
-        }
+        else { ProcessMemory = bytes; }
         useUE4Lib = useAndroid;
     }
 
@@ -442,19 +436,13 @@ public class Searcher
         } catch { return "4.18.1"; }
     }
 
-    // НОВЫЙ МЕТОД: Проверяет, похожи ли байты на реальный AES ключ
     private bool IsValidKey(byte[] key)
     {
         if (key == null || key.Length != 32) return false;
-        
-        // 1. Убираем ключи, состоящие только из нулей или одинаковых байт
         int distinct = key.Distinct().Count();
-        if (distinct < 8) return false;
-
-        // 2. Убираем ключи, которые выглядят как обычный текст (слишком много ASCII символов)
+        if (distinct < 10) return false; // Ключ не может состоять из одних нулей или одинаковых байт
         int asciiCount = key.Count(b => b >= 32 && b <= 126);
-        if (asciiCount > 25) return false;
-
+        if (asciiCount > 20) return false; // Ключ — это не читаемый текст
         return true;
     }
 
@@ -462,29 +450,20 @@ public class Searcher
     {
         Stopwatch sw = Stopwatch.StartNew();
         var results = new Dictionary<ulong, string>();
-        var seenKeys = new HashSet<string>(); 
+        var seenKeys = new HashSet<string>();
 
         if (useUE4Lib)
         {
-            // --- Логика для Android (libUE4.so) ---
             for (int i = 0; i < ProcessMemory.Length - 16; i++)
             {
                 if (ProcessMemory[i] == 0x01 && ProcessMemory[i+1] == 0x01) {
                     int addr = GetADRLAddress(i);
-                    if (addr > 0 && addr + 32 <= ProcessMemory.Length)
-                    {
-                        byte[] potentialKey = new byte[32];
-                        Buffer.BlockCopy(ProcessMemory, addr, potentialKey, 0, 32);
-
-                        if (IsValidKey(potentialKey))
-                        {
-                            string hex = "0x" + BitConverter.ToString(potentialKey).Replace("-", "");
-                            if (seenKeys.Add(hex)) 
-                            {
-                                string base64 = Convert.ToBase64String(potentialKey);
-                                // Форматируем строку сразу как тебе нужно
-                                results[AllocationBase + (ulong)addr] = $"{hex} ({base64}) at {AllocationBase + (ulong)addr}";
-                            }
+                    if (addr > 0 && addr + 32 <= ProcessMemory.Length) {
+                        byte[] key = new byte[32];
+                        Buffer.BlockCopy(ProcessMemory, addr, key, 0, 32);
+                        if (IsValidKey(key)) {
+                            string hex = "0x" + BitConverter.ToString(key).Replace("-", "");
+                            if (seenKeys.Add(hex)) results[AllocationBase + (ulong)addr] = hex;
                         }
                     }
                 }
@@ -492,32 +471,22 @@ public class Searcher
         }
         else
         {
-            // --- Логика для Windows (x64) ---
             for (int i = 0; i < ProcessMemory.Length - 100; i++)
             {
                 if (ProcessMemory[i] == 0xC7 && (ProcessMemory[i+1] == 0x45 || ProcessMemory[i+1] == 0x44))
                 {
+                    byte[] keyBuffer = new byte[32];
                     int curr = i;
                     bool fail = false;
-                    byte[] keyBuffer = new byte[32];
-                    
-                    for (int j = 0; j < 8; j++)
-                    {
+                    for (int j = 0; j < 8; j++) {
                         if (curr + 7 > ProcessMemory.Length || ProcessMemory[curr] != 0xC7) { fail = true; break; }
                         Buffer.BlockCopy(ProcessMemory, curr + 3, keyBuffer, j * 4, 4);
                         curr += 7; 
                         if (curr < ProcessMemory.Length && ProcessMemory[curr] == 0xE9) curr = FollowJMP(curr);
                     }
-                    
-                    if (!fail && IsValidKey(keyBuffer))
-                    {
+                    if (!fail && IsValidKey(keyBuffer)) {
                         string hex = "0x" + BitConverter.ToString(keyBuffer).Replace("-", "");
-                        if (seenKeys.Add(hex))
-                        {
-                            string base64 = Convert.ToBase64String(keyBuffer);
-                            // Форматируем строку: 0xHEX (BASE64) at OFFSET
-                            results[AllocationBase + (ulong)i] = $"{hex} ({base64}) at {AllocationBase + (ulong)i}";
-                        }
+                        if (seenKeys.Add(hex)) results[AllocationBase + (ulong)i] = hex;
                     }
                 }
             }
@@ -544,26 +513,15 @@ public class Searcher
 
     private int FindPattern(byte[] src, byte[] pat) {
         for (int i = 0; i <= src.Length - pat.Length; i++) {
-            bool match = true;
-            for (int j = 0; j < pat.Length; j++) {
-                if (src[i + j] != pat[j]) { match = false; break; }
-            }
-            if (match) return i;
+            bool m = true;
+            for (int j = 0; j < pat.Length; j++) if (src[i + j] != pat[j]) { m = false; break; }
+            if (m) return i;
         }
         return -1;
     }
 
     public static class Win32 {
         [DllImport("kernel32.dll", SetLastError = true)]
-        public static extern bool ReadProcessMemory(IntPtr hProcess, ulong lpBaseAddress, [Out] byte[] lpBuffer, int dwSize, out int lpNumberOfBytesRead);
-        [DllImport("kernel32.dll")]
-        public static extern IntPtr OpenProcess(int dwDesiredAccess, bool bInheritHandle, int dwProcessId);
+        public static extern bool ReadProcessMemory(IntPtr h, ulong a, [Out] byte[] b, int s, out int r);
     }
 }
-
-
-
-
-
-
-
