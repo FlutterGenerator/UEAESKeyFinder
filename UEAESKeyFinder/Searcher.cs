@@ -551,3 +551,4 @@ public class Searcher
             [Out] byte[] lpBuffer, int dwSize, int lpNumberOfBytesRead = 0);
     }
 }
+
