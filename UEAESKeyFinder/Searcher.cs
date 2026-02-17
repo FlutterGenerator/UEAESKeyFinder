@@ -440,9 +440,9 @@ public class Searcher
     {
         if (key == null || key.Length != 32) return false;
         int distinct = key.Distinct().Count();
-        if (distinct < 10) return false; // Ключ не может состоять из одних нулей или одинаковых байт
-        int asciiCount = key.Count(b => b >= 32 && b <= 126);
-        if (asciiCount > 20) return false; // Ключ — это не читаемый текст
+        if (distinct < 20) return false; // Ключ не может состоять из одних нулей или одинаковых байт
+        int zeroCount = key.Count(b => b == 0x00);
+        if (zeroCount > 5) return false; // Ключ — это не читаемый текст
         return true;
     }
 
@@ -525,3 +525,4 @@ public class Searcher
         public static extern bool ReadProcessMemory(IntPtr h, ulong a, [Out] byte[] b, int s, out int r);
     }
 }
+
