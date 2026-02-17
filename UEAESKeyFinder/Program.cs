@@ -104,7 +104,7 @@ namespace UEAesKeyFinder
 
                     saveName = path.Split("\\")[path.Split("\\").Length-1];
 
-                    searcher = new Searcher(File.ReadAllBytes(path));
+                    searcher = new Searcher(File.ReadAllBytes(path), false); 
                     searcher.SetFilePath(path);
                     EngineVersion = searcher.SearchEngineVersion();
                     if (EngineVersion != "")
