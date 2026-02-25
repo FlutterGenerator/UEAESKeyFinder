@@ -410,83 +410,100 @@ public class Searcher
     }
 
     public Searcher(byte[] bytes, bool useAndroid, bool isAPK = false)
+{
+    if (isAPK)
     {
-        if (isAPK)
-        {
-            // Поиск "APK Sig Block" (ищем подпись APK)
-            int libUE4Offset = 0;
-            byte[] apkSigBlock = Encoding.ASCII.GetBytes("APK Sig Block");
+        // 1. Locate the "APK Sig Block" (APK Signature Scheme block)
+        int sigBlockOffset = 0;
+        byte[] apkSigBlock = Encoding.ASCII.GetBytes("APK Sig Block");
 
-            for (int i = bytes.Length - apkSigBlock.Length - 1; i >= 0; i--)
+        for (int i = bytes.Length - apkSigBlock.Length - 1; i >= 0; i--)
+        {
+            bool matched = true;
+            for (int j = 0; j < apkSigBlock.Length; j++)
+            {
+                if (bytes[i + j] != apkSigBlock[j])
+                {
+                    matched = false;
+                    break;
+                }
+            }
+            if (matched)
+            {
+                sigBlockOffset = i;
+                break;
+            }
+        }
+
+        if (sigBlockOffset == 0)
+            throw new Exception("Failed to read APK: APK Sig Block not found!");
+
+        // 2. Universal search for the Engine Library (UE4 or UE5/Unreal)
+        // We check both naming conventions used by the engine
+        string[] targetLibs = { "lib/arm64-v8a/libUE4.so", "lib/arm64-v8a/libUnreal.so" };
+        int foundOffset = 0;
+
+        foreach (string libName in targetLibs)
+        {
+            byte[] pattern = Encoding.ASCII.GetBytes(libName);
+            
+            // Search for the library path in the Central Directory (located after the Sig Block)
+            for (int i = sigBlockOffset; i < bytes.Length - pattern.Length - 4; i++)
             {
                 bool matched = true;
-                for (int j = 0; j < apkSigBlock.Length; j++)
+                for (int ii = 0; ii < pattern.Length; ii++)
                 {
-                    if (bytes[i + j] != apkSigBlock[j])
+                    if (bytes[i + ii] != pattern[ii])
                     {
                         matched = false;
                         break;
                     }
                 }
+                
                 if (matched)
                 {
-                    libUE4Offset = i;
+                    // Read the relative offset of the Local File Header (4 bytes before the path string)
+                    foundOffset = BitConverter.ToInt32(bytes, i - 4);
                     break;
                 }
             }
-
-            if (libUE4Offset == 0)
-                throw new Exception("Failed to read LibUE4.so, APK Sig Block not found!");
-
-            // Поиск оффсета libUE4.so в блоке
-            byte[] libUE4 = Encoding.ASCII.GetBytes("lib/arm64-v8a/libUE4.so");
-
-            int foundOffset = 0;
-            for (int i = libUE4Offset; i < bytes.Length - libUE4.Length - 4; i++)
-            {
-                if (bytes[i] != libUE4[0]) continue;
-                bool c = false;
-                for (int ii = 0; ii < libUE4.Length; ii++)
-                {
-                    if (bytes[i + ii] != libUE4[ii])
-                    {
-                        c = true;
-                        break;
-                    }
-                }
-                if (c) continue;
-
-                // Считаем offset 4 байта перед этим местом (int32 little-endian)
-                foundOffset = BitConverter.ToInt32(bytes, i - 4);
-                break;
-            }
-
-            if (foundOffset == 0)
-                throw new Exception("Failed to read LibUE4.so, pattern not found!");
-
-            int compressed = BitConverter.ToInt32(bytes, foundOffset + 18);
-            int uncompressed = BitConverter.ToInt32(bytes, foundOffset + 22);
-            int headerSize = 53;
-            int dataStart = foundOffset + headerSize;
-
-            using (var compressedStream = new MemoryStream(bytes, dataStart, compressed))
-            using (var deflateStream = new DeflateStream(compressedStream, CompressionMode.Decompress))
-            using (var uncompressedLibUE4 = new MemoryStream())
-            {
-                deflateStream.CopyTo(uncompressedLibUE4);
-                if (uncompressedLibUE4.Length != uncompressed)
-                    throw new Exception("Failed to decompress LibUE4.so, size mismatch!");
-
-                ProcessMemory = uncompressedLibUE4.ToArray();
-            }
+            if (foundOffset != 0) break; // Exit loop if a library is found
         }
-        else
+
+        if (foundOffset == 0)
+            throw new Exception("Engine library (libUE4.so or libUnreal.so) not found in APK!");
+
+        // 3. Dynamic Calculation of Data Start (Local File Header parsing)
+        // ZIP Format: Header(30 bytes) + FileNameLength(2 bytes) + ExtraFieldLength(2 bytes)
+        int compressed = BitConverter.ToInt32(bytes, foundOffset + 18);
+        int uncompressed = BitConverter.ToInt32(bytes, foundOffset + 22);
+        short fileNameLen = BitConverter.ToInt16(bytes, foundOffset + 26);
+        short extraLen = BitConverter.ToInt16(bytes, foundOffset + 28);
+        
+        // Accurate start of the compressed data stream
+        int dataStart = foundOffset + 30 + fileNameLen + extraLen;
+
+        
+
+        using (var compressedStream = new MemoryStream(bytes, dataStart, compressed))
+        using (var deflateStream = new DeflateStream(compressedStream, CompressionMode.Decompress))
+        using (var uncompressedLib = new MemoryStream())
         {
-            ProcessMemory = bytes;
-        }
+            deflateStream.CopyTo(uncompressedLib);
+            
+            if (uncompressedLib.Length != uncompressed)
+                throw new Exception("Decompression failed: Size mismatch!");
 
-        useUE4Lib = useAndroid;
+            ProcessMemory = uncompressedLib.ToArray();
+        }
     }
+    else
+    {
+        ProcessMemory = bytes;
+    }
+
+    useUE4Lib = useAndroid;
+}
 
     public void SetFilePath(string path) => FilePath = path;
 
@@ -752,3 +769,4 @@ public static extern bool ReadProcessMemory(IntPtr hProcess, ulong lpBaseAddress
         public static extern IntPtr OpenProcess(int dwDesiredAccess, bool bInheritHandle, int dwProcessId);
     }
 }
+
