@@ -39,7 +39,7 @@ jobs:
         run: echo "now=$(date -u -d '+5 hour' '+%Y-%m-%d %H:%M:%S')" >> $GITHUB_ENV
 
       - name: Create or Update Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: latest
           name: "UEAESKeyFinder Build (${{ env.now }})"
