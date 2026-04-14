@@ -41,7 +41,7 @@ jobs:
       - name: Create or Update Release
         uses: softprops/action-gh-release@v3
         with:
-          tag_name: build-${{ env.now }}
+          tag_name: build-${{ github.run_number }}
           name: "UEAESKeyFinder Build (${{ env.now }})"
           body: "Build time: ${{ env.now }}"
           files: ./publish/**
