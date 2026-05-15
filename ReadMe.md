@@ -38,3 +38,16 @@ Found 1 AES Keys in 720ms
     <img src="https://img.shields.io/github/forks/FlutterGenerator/UEAESKeyFinder?style=social"/>
   </a>
 </div>
+
+---
+
+## Windows Compatibility
+
+| File | Windows | Bits | .NET required |
+|------|---------|------|---------------|
+| `UEAESKeyFinder-XP-x86.exe`   | XP SP3 / Vista / 7 / 8 / 10 / 11 | 32-bit | [4.0](https://www.microsoft.com/download/details.aspx?id=17718) |
+| `UEAESKeyFinder-XP-x64.exe`   | XP x64 / Vista / 7 / 8 / 10 / 11 | 64-bit | [4.0](https://www.microsoft.com/download/details.aspx?id=17718) |
+| `UEAESKeyFinder-Win7-x86.exe` | Win 7 SP1 / 8.1 / 10 / 11         | 32-bit | [4.8](https://dotnet.microsoft.com/download/dotnet-framework/net48) |
+| `UEAESKeyFinder-Win7-x64.exe` | Win 7 SP1 / 8.1 / 10 / 11         | 64-bit | [4.8](https://dotnet.microsoft.com/download/dotnet-framework/net48) |
+
+> On Win 10 / 11 use `Win7-x64.exe` — newest build, reads 64-bit game processes.
