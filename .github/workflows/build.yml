@@ -20,30 +20,65 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v5
         with:
-          dotnet-version: |
-           3.1.x
-           6.0.x
-           7.0.x
-           8.0.x
-           9.0.x
-           10.0.x
+          dotnet-version: 9.0.x
+
       - name: Restore dependencies
         run: dotnet restore UEAESKeyFinder.sln
 
-      - name: Build Publish Binary
-        run: dotnet publish ./UEAESKeyFinder/UEAESKeyFinder.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeAllContentForSelfExtract=true -p:PublishTrimmed=false -o ./publish
+      # ── net40 (XP SP3 / Vista / 7 / 8 / 10 / 11) ──────────────────────────
+      - name: Build net40 x86 (32-bit, XP+)
+        run: dotnet build ./UEAESKeyFinder/UEAESKeyFinder.csproj -c Release -f net40 -p:Platform=x86
+
+      - name: Build net40 x64 (64-bit, XP x64+)
+        run: dotnet build ./UEAESKeyFinder/UEAESKeyFinder.csproj -c Release -f net40 -p:Platform=x64
+
+      # ── net48 (Win7 SP1 / 8 / 8.1 / 10 / 11) ──────────────────────────────
+      - name: Build net48 x86 (32-bit, Win7+)
+        run: dotnet build ./UEAESKeyFinder/UEAESKeyFinder.csproj -c Release -f net48 -p:Platform=x86
+
+      - name: Build net48 x64 (64-bit, Win7+)
+        run: dotnet build ./UEAESKeyFinder/UEAESKeyFinder.csproj -c Release -f net48 -p:Platform=x64
+
+      # ── Переименовываем EXE чтобы не конфликтовали в релизе ────────────────
+      - name: Collect artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path publish | Out-Null
+
+          Copy-Item "UEAESKeyFinder/bin/x86/Release/net40/UEAESKeyFinder.exe" `
+                    "publish/UEAESKeyFinder-XP-x86.exe"
+
+          Copy-Item "UEAESKeyFinder/bin/x64/Release/net40/UEAESKeyFinder.exe" `
+                    "publish/UEAESKeyFinder-XP-x64.exe"
+
+          Copy-Item "UEAESKeyFinder/bin/x86/Release/net48/UEAESKeyFinder.exe" `
+                    "publish/UEAESKeyFinder-Win7-x86.exe"
+
+          Copy-Item "UEAESKeyFinder/bin/x64/Release/net48/UEAESKeyFinder.exe" `
+                    "publish/UEAESKeyFinder-Win7-x64.exe"
+
+          Get-ChildItem publish/
 
       - name: Get DateTime Tashkent/Uzbekistan
-        id: datetime
         shell: bash
         run: echo "now=$(date -u -d '+5 hour' '+%Y-%m-%d %H:%M:%S')" >> $GITHUB_ENV
 
-      - name: Create or Update Release
+      - name: Create Release
         uses: softprops/action-gh-release@v3
         with:
           tag_name: build-${{ github.run_number }}
           name: "UEAESKeyFinder Build (${{ env.now }})"
-          body: "Build time: ${{ env.now }}"
-          files: ./publish/**
+          body: |
+            Build time: ${{ env.now }}
+
+            | Файл | Windows | Битность | .NET |
+            |------|---------|----------|------|
+            | `UEAESKeyFinder-XP-x86.exe`   | XP SP3 / Vista / 7 / 8 / 10 / 11 | 32-bit | 4.0 |
+            | `UEAESKeyFinder-XP-x64.exe`   | XP x64 / Vista / 7 / 8 / 10 / 11 | 64-bit | 4.0 |
+            | `UEAESKeyFinder-Win7-x86.exe` | Win 7 SP1 / 8.1 / 10 / 11         | 32-bit | 4.8 |
+            | `UEAESKeyFinder-Win7-x64.exe` | Win 7 SP1 / 8.1 / 10 / 11         | 64-bit | 4.8 |
+
+            > **Совет:** на Win 10/11 используй `Win7-x64.exe` — это самая свежая сборка.
+          files: publish/*.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
