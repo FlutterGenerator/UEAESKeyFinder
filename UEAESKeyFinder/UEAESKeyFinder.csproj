@@ -1,25 +1,33 @@
+
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
 
-    <!-- XP → 11 -->
+    <!--
+      net40  = .NET 4.0  → Windows XP SP3 / Vista / 7 / 8 / 8.1 / 10 / 11
+      net48  = .NET 4.8  → Windows 7 SP1 / 8 / 8.1 / 10 / 11  (рекомендуется на Win7+)
+    -->
     <TargetFrameworks>net40;net48</TargetFrameworks>
 
-    <Platforms>AnyCPU;x64</Platforms>
+    <Platforms>AnyCPU;x86;x64</Platforms>
 
+    <!-- C# 7.3: поддерживает out var, string interpolation, но без range/index (C#8+) -->
     <LangVersion>7.3</LangVersion>
     <Nullable>disable</Nullable>
     <ImplicitUsings>false</ImplicitUsings>
 
     <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
+
+    <AssemblyName>UEAESKeyFinder</AssemblyName>
+    <RootNamespace>UEAesKeyFinder</RootNamespace>
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Costura.Fody: вшивает все DLL прямо в EXE — один файл без установки -->
     <PackageReference Include="Costura.Fody" Version="6.0.0">
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
-
     <PackageReference Include="Fody" Version="6.9.3">
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
