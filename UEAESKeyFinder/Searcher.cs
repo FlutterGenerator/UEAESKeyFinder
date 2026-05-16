@@ -95,7 +95,12 @@ public class Searcher
             using (var deflateStream = new DeflateStream(compressedStream, CompressionMode.Decompress))
             using (var uncompressedLib = new MemoryStream())
             {
-                deflateStream.CopyTo(uncompressedLib);
+                // Stream.CopyTo недоступен в .NET 3.5 — читаем вручную
+                byte[] buf = new byte[81920];
+                int read;
+                while ((read = deflateStream.Read(buf, 0, buf.Length)) > 0)
+                    uncompressedLib.Write(buf, 0, read);
+
                 if (uncompressedLib.Length != uncompressed)
                     throw new Exception("Decompression failed: Size mismatch!");
                 ProcessMemory = uncompressedLib.ToArray();
