@@ -43,11 +43,20 @@ Found 1 AES Keys in 720ms
 
 ## Windows Compatibility
 
-| File | Windows | Bits | .NET required |
-|------|---------|------|---------------|
-| `UEAESKeyFinder-XP-x86.exe`   | XP SP3 / Vista / 7 / 8 / 10 / 11 | 32-bit | [4.0](https://www.microsoft.com/download/details.aspx?id=17718) |
-| `UEAESKeyFinder-XP-x64.exe`   | XP x64 / Vista / 7 / 8 / 10 / 11 | 64-bit | [4.0](https://www.microsoft.com/download/details.aspx?id=17718) |
-| `UEAESKeyFinder-Win7-x86.exe` | Win 7 SP1 / 8.1 / 10 / 11         | 32-bit | [4.8](https://dotnet.microsoft.com/download/dotnet-framework/net48) |
-| `UEAESKeyFinder-Win7-x64.exe` | Win 7 SP1 / 8.1 / 10 / 11         | 64-bit | [4.8](https://dotnet.microsoft.com/download/dotnet-framework/net48) |
+| File | Platform | Bits | .NET |
+|------|----------|------|------|
+| `UEAESKeyFinder-Exagear-x86.exe` | **Exagear / Wine (Android)** | 32-bit | 3.5 (встроен в Wine) |
+| `UEAESKeyFinder-XP-x86.exe`      | Windows XP SP3 | 32-bit | [4.0](https://www.microsoft.com/download/details.aspx?id=17718) |
+| `UEAESKeyFinder-XP-x64.exe`      | Windows XP x64 | 64-bit | [4.0](https://www.microsoft.com/download/details.aspx?id=17718) |
+| `UEAESKeyFinder-7-x86.exe`       | Windows 7 SP1  | 32-bit | [4.6.1](https://dotnet.microsoft.com/download/dotnet-framework/net461) |
+| `UEAESKeyFinder-7-x64.exe`       | Windows 7 SP1  | 64-bit | [4.6.1](https://dotnet.microsoft.com/download/dotnet-framework/net461) |
+| `UEAESKeyFinder-8-x86.exe`       | Windows 8      | 32-bit | [4.8](https://dotnet.microsoft.com/download/dotnet-framework/net48) |
+| `UEAESKeyFinder-8-x64.exe`       | Windows 8      | 64-bit | [4.8](https://dotnet.microsoft.com/download/dotnet-framework/net48) |
+| `UEAESKeyFinder-8.1-x86.exe`     | Windows 8.1    | 32-bit | [4.8](https://dotnet.microsoft.com/download/dotnet-framework/net48) |
+| `UEAESKeyFinder-8.1-x64.exe`     | Windows 8.1    | 64-bit | [4.8](https://dotnet.microsoft.com/download/dotnet-framework/net48) |
+| `UEAESKeyFinder-10-x86.exe`      | Windows 10     | 32-bit | встроен |
+| `UEAESKeyFinder-10-x64.exe`      | Windows 10     | 64-bit | встроен |
+| `UEAESKeyFinder-11-x86.exe`      | Windows 11     | 32-bit | встроен |
+| `UEAESKeyFinder-11-x64.exe`      | Windows 11     | 64-bit | встроен |
 
-> On Win 10 / 11 use `Win7-x64.exe` — newest build, reads 64-bit game processes.
+> **Exagear**: используй `UEAESKeyFinder-Exagear-x86.exe` — собран на .NET 3.5 без Costura.Fody, Wine Mono запускает его без установки .NET.
