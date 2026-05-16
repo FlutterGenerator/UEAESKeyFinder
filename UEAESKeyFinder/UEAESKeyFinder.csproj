@@ -1,18 +1,19 @@
-
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
 
     <!--
-      net40  = .NET 4.0  → Windows XP SP3 / Vista / 7 / 8 / 8.1 / 10 / 11
-      net48  = .NET 4.8  → Windows 7 SP1 / 8 / 8.1 / 10 / 11  (рекомендуется на Win7+)
+      net35  = .NET 3.5  → Exagear (Wine/Android), XP SP2+
+      net40  = .NET 4.0  → Windows XP SP3 / Vista / 7 / 8 / 10 / 11
+      net461 = .NET 4.6.1→ Windows 7 SP1+
+      net48  = .NET 4.8  → Windows 7 SP1 / 8 / 8.1 / 10 / 11
+      net481 = .NET 4.8.1→ Windows 10 / 11
     -->
-    <TargetFrameworks>net40;net48</TargetFrameworks>
+    <TargetFrameworks>net35;net40;net461;net48;net481</TargetFrameworks>
 
     <Platforms>AnyCPU;x86;x64</Platforms>
 
-    <!-- C# 7.3: поддерживает out var, string interpolation, но без range/index (C#8+) -->
     <LangVersion>7.3</LangVersion>
     <Nullable>disable</Nullable>
     <ImplicitUsings>false</ImplicitUsings>
@@ -23,8 +24,8 @@
     <RootNamespace>UEAesKeyFinder</RootNamespace>
   </PropertyGroup>
 
-  <ItemGroup>
-    <!-- Costura.Fody: вшивает все DLL прямо в EXE — один файл без установки -->
+  <!-- Costura.Fody только для net40+ — для net35 не поддерживается, Wine его ломает -->
+  <ItemGroup Condition="'$(TargetFramework)' != 'net35'">
     <PackageReference Include="Costura.Fody" Version="6.0.0">
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
