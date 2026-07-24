@@ -10,6 +10,7 @@ using System.Runtime.InteropServices;
 public class Searcher
 {
     private bool useUE4Lib = false;
+    private bool isArm64Lib = true; // false => armeabi-v7a (32-bit ARM/Thumb)
 
     private IntPtr hProcess;
     private Process Process;
@@ -64,10 +65,13 @@ public class Searcher
             if (sigBlockOffset == 0)
                 throw new Exception("Failed to read APK: APK Sig Block not found!");
 
-            string[] targetLibs = { "lib/arm64-v8a/libUE4.so", "lib/arm64-v8a/libUnreal.so" };
+            // Try arm64-v8a first, fall back to armeabi-v7a
+            string[] arm64Libs = { "lib/arm64-v8a/libUE4.so", "lib/arm64-v8a/libUnreal.so" };
+            string[] arm32Libs = { "lib/armeabi-v7a/libUE4.so", "lib/armeabi-v7a/libUnreal.so" };
             int foundOffset = 0;
+            bool foundArm64 = false;
 
-            foreach (string libName in targetLibs)
+            foreach (string libName in arm64Libs)
             {
                 byte[] pattern = Encoding.ASCII.GetBytes(libName);
                 for (int i = sigBlockOffset; i < bytes.Length - pattern.Length - 4; i++)
@@ -77,13 +81,33 @@ public class Searcher
                     {
                         if (bytes[i + ii] != pattern[ii]) { matched = false; break; }
                     }
-                    if (matched) { foundOffset = BitConverter.ToInt32(bytes, i - 4); break; }
+                    if (matched) { foundOffset = BitConverter.ToInt32(bytes, i - 4); foundArm64 = true; break; }
                 }
                 if (foundOffset != 0) break;
             }
 
             if (foundOffset == 0)
-                throw new Exception("Engine library (libUE4.so or libUnreal.so) not found in APK!");
+            {
+                foreach (string libName in arm32Libs)
+                {
+                    byte[] pattern = Encoding.ASCII.GetBytes(libName);
+                    for (int i = sigBlockOffset; i < bytes.Length - pattern.Length - 4; i++)
+                    {
+                        bool matched = true;
+                        for (int ii = 0; ii < pattern.Length; ii++)
+                        {
+                            if (bytes[i + ii] != pattern[ii]) { matched = false; break; }
+                        }
+                        if (matched) { foundOffset = BitConverter.ToInt32(bytes, i - 4); foundArm64 = false; break; }
+                    }
+                    if (foundOffset != 0) break;
+                }
+            }
+
+            if (foundOffset == 0)
+                throw new Exception("Engine library (libUE4.so or libUnreal.so) not found in APK for arm64-v8a or armeabi-v7a!");
+
+            isArm64Lib = foundArm64;
 
             int compressed   = BitConverter.ToInt32(bytes, foundOffset + 18);
             int uncompressed = BitConverter.ToInt32(bytes, foundOffset + 22);
@@ -109,6 +133,14 @@ public class Searcher
         else
         {
             ProcessMemory = bytes;
+
+            // Raw .so passed directly (method 3): read e_machine from the ELF header
+            // to tell arm64 (EM_AARCH64 = 183) apart from arm32 (EM_ARM = 40).
+            if (bytes.Length > 20 && bytes[0] == 0x7F && bytes[1] == 'E' && bytes[2] == 'L' && bytes[3] == 'F')
+            {
+                ushort eMachine = BitConverter.ToUInt16(bytes, 18);
+                isArm64Lib = (eMachine == 183); // false (EM_ARM=40) => armeabi-v7a
+            }
         }
 
         useUE4Lib = useAndroid;
@@ -183,6 +215,61 @@ public class Searcher
         return (int)((((ulong)ADRPLoc & 0xFFFFF000) + ADRP + ADD) & 0xFFFFFFFF);
     }
 
+    // Heuristic ARM32 (Thumb-2) equivalent of the arm64 getter-pattern search above.
+    // The arm64 pattern (ldp/stp x1,x0 + ret) was tuned against real compiled UE4
+    // binaries. This ARM32 version looks for the closest Thumb-2 analogue: two
+    // "LDM src!, {..4 regs}" / "STM dst!, {..4 regs}" pairs (16 bytes each = 32 bytes
+    // total) immediately followed by a Thumb return (POP {..,pc} or BX LR).
+    // NOTE: unlike the arm64 branch, this hasn't been verified against a real
+    // armeabi-v7a UE4/libUnreal.so binary yet — the exact opcodes clang emits can
+    // vary by NDK/optimization level. Treat hits as candidates and sanity-check the
+    // resulting bytes (should look like a plausible high-entropy 32-byte key).
+    private void FindArm32Pattern(Dictionary<ulong, string> offsets)
+    {
+        for (int i = 0; i < ProcessMemory.Length - 8; i++)
+        {
+            // Thumb-2 32-bit LDM (Rn!, {reglist}) encoding: 1110 1000 10W1 nnnn / reglist
+            // First halfword high byte 0xE8 or 0xE9, second nibble pattern for LDM.
+            bool ldm1 = (ProcessMemory[i + 1] == 0xE8 || ProcessMemory[i + 1] == 0xE9) &&
+                        (ProcessMemory[i] & 0x0F) == 0x0B; // writeback LDM-ish shape
+
+            if (!ldm1) continue;
+
+            // Look ahead a short window for a second LDM/STM pair and a return
+            // (BX LR = 0x70 0x47 in Thumb, or POP {..,pc} = high bit set + 0xBD/0xE8 forms).
+            int windowEnd = Math.Min(i + 40, ProcessMemory.Length - 2);
+            bool foundReturn = false;
+            int returnAddr = -1;
+
+            for (int j = i + 4; j < windowEnd; j++)
+            {
+                if (ProcessMemory[j] == 0x70 && ProcessMemory[j + 1] == 0x47) // BX LR
+                {
+                    foundReturn = true;
+                    returnAddr = j;
+                    break;
+                }
+                if ((ProcessMemory[j + 1] & 0xBD) == 0xBD && (ProcessMemory[j] & 0x01) != 0) // POP {..,pc} heuristic
+                {
+                    foundReturn = true;
+                    returnAddr = j;
+                    break;
+                }
+            }
+
+            if (!foundReturn) continue;
+
+            // Candidate key region: read 32 bytes starting a few instructions back
+            // from the first LDM (source pointer is normally set up just before it
+            // via MOVW/MOVT or an ADR literal load, a handful of bytes earlier).
+            int candidateAddr = i - 8;
+            if (candidateAddr < 0 || candidateAddr + 32 > ProcessMemory.Length) continue;
+
+            string aesKey = BitConverter.ToString(ProcessMemory, candidateAddr, 32).Replace("-", "");
+            offsets.Add(AllocationBase + (ulong)candidateAddr, "0x" + aesKey);
+        }
+    }
+
     public Dictionary<ulong, string> FindAllPattern(out long elapsedMilliseconds)
     {
         var timer = Stopwatch.StartNew();
@@ -190,32 +277,39 @@ public class Searcher
 
         if (useUE4Lib)
         {
-            for (int i = 0; i < ProcessMemory.Length - 12; i++)
+            if (isArm64Lib)
             {
-                if (ProcessMemory[i]      != 0x01) continue;
-                if (ProcessMemory[i + 1]  != 0x01) continue;
-                if (ProcessMemory[i + 2]  != 0x40) continue;
-                if (ProcessMemory[i + 3]  != 0xAD) continue;
-                if (ProcessMemory[i + 4]  != 0x01) continue;
-                if (ProcessMemory[i + 5]  != 0x00) continue;
-                if (ProcessMemory[i + 6]  != 0x00) continue;
-                if (ProcessMemory[i + 7]  != 0xAD) continue;
-                if (ProcessMemory[i + 8]  != 0xC0) continue;
-                if (ProcessMemory[i + 9]  != 0x03) continue;
-                if (ProcessMemory[i + 10] != 0x5F) continue;
-                if (ProcessMemory[i + 11] != 0xD6) continue;
+                for (int i = 0; i < ProcessMemory.Length - 12; i++)
+                {
+                    if (ProcessMemory[i]      != 0x01) continue;
+                    if (ProcessMemory[i + 1]  != 0x01) continue;
+                    if (ProcessMemory[i + 2]  != 0x40) continue;
+                    if (ProcessMemory[i + 3]  != 0xAD) continue;
+                    if (ProcessMemory[i + 4]  != 0x01) continue;
+                    if (ProcessMemory[i + 5]  != 0x00) continue;
+                    if (ProcessMemory[i + 6]  != 0x00) continue;
+                    if (ProcessMemory[i + 7]  != 0xAD) continue;
+                    if (ProcessMemory[i + 8]  != 0xC0) continue;
+                    if (ProcessMemory[i + 9]  != 0x03) continue;
+                    if (ProcessMemory[i + 10] != 0x5F) continue;
+                    if (ProcessMemory[i + 11] != 0xD6) continue;
 
-                int aesKeyAddr = GetADRLAddress(i - 8);
-                if (aesKeyAddr < 0 || aesKeyAddr + 32 > ProcessMemory.Length) continue;
+                    int aesKeyAddr = GetADRLAddress(i - 8);
+                    if (aesKeyAddr < 0 || aesKeyAddr + 32 > ProcessMemory.Length) continue;
 
-                string aesKey = BitConverter.ToString(ProcessMemory, aesKeyAddr, 32).Replace("-", "");
-                offsets.Add(AllocationBase + (ulong)aesKeyAddr, "0x" + aesKey);
+                    string aesKey = BitConverter.ToString(ProcessMemory, aesKeyAddr, 32).Replace("-", "");
+                    offsets.Add(AllocationBase + (ulong)aesKeyAddr, "0x" + aesKey);
 
-                aesKeyAddr += 0x1000;
-                if (aesKeyAddr + 32 > ProcessMemory.Length) continue;
+                    aesKeyAddr += 0x1000;
+                    if (aesKeyAddr + 32 > ProcessMemory.Length) continue;
 
-                aesKey = BitConverter.ToString(ProcessMemory, aesKeyAddr, 32).Replace("-", "");
-                offsets.Add(AllocationBase + (ulong)aesKeyAddr, "0x" + aesKey);
+                    aesKey = BitConverter.ToString(ProcessMemory, aesKeyAddr, 32).Replace("-", "");
+                    offsets.Add(AllocationBase + (ulong)aesKeyAddr, "0x" + aesKey);
+                }
+            }
+            else
+            {
+                FindArm32Pattern(offsets);
             }
         }
         else
