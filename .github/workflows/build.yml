@@ -17,50 +17,43 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v6
-        with:
-          dotnet-version: |
-            8.0.x
-            9.0.x
+      - name: setup-msbuild
+        uses: microsoft/setup-msbuild@v3
 
-      - name: List installed SDKs
-        run: dotnet --list-sdks
-            
       - name: Restore dependencies
-        run: dotnet restore UEAESKeyFinder.sln
+        run: msbuild UEAESKeyFinder.sln /t:Restore /p:Configuration=Release
 
       # ── Exagear (Wine/Android) ── net35, x86 только, без Costura.Fody ──────
       - name: Build net35 x86 (Exagear / Wine)
-        run: dotnet build ./UEAESKeyFinder/UEAESKeyFinder.csproj -c Release -f net35 -p:Platform=x86
+        run: msbuild ./UEAESKeyFinder/UEAESKeyFinder.csproj -c Release -f net35 -p:Platform=x86
 
       # ── XP SP3 / Vista ── net40 ─────────────────────────────────────────────
       - name: Build net40 x86 (XP)
-        run: dotnet build ./UEAESKeyFinder/UEAESKeyFinder.csproj -c Release -f net40 -p:Platform=x86
+        run: msbuild ./UEAESKeyFinder/UEAESKeyFinder.csproj -c Release -f net40 -p:Platform=x86
 
       - name: Build net40 x64 (XP x64)
-        run: dotnet build ./UEAESKeyFinder/UEAESKeyFinder.csproj -c Release -f net40 -p:Platform=x64
+        run: msbuild ./UEAESKeyFinder/UEAESKeyFinder.csproj -c Release -f net40 -p:Platform=x64
 
       # ── Win 7 SP1 ── net461 ──────────────────────────────────────────────────
       - name: Build net461 x86 (Win7)
-        run: dotnet build ./UEAESKeyFinder/UEAESKeyFinder.csproj -c Release -f net461 -p:Platform=x86
+        run: msbuild ./UEAESKeyFinder/UEAESKeyFinder.csproj -c Release -f net461 -p:Platform=x86
 
       - name: Build net461 x64 (Win7)
-        run: dotnet build ./UEAESKeyFinder/UEAESKeyFinder.csproj -c Release -f net461 -p:Platform=x64
+        run: msbuild ./UEAESKeyFinder/UEAESKeyFinder.csproj -c Release -f net461 -p:Platform=x64
 
       # ── Win 8 / 8.1 ── net48 ────────────────────────────────────────────────
       - name: Build net48 x86 (Win8/8.1)
-        run: dotnet build ./UEAESKeyFinder/UEAESKeyFinder.csproj -c Release -f net48 -p:Platform=x86
+        run: msbuild ./UEAESKeyFinder/UEAESKeyFinder.csproj -c Release -f net48 -p:Platform=x86
 
       - name: Build net48 x64 (Win8/8.1)
-        run: dotnet build ./UEAESKeyFinder/UEAESKeyFinder.csproj -c Release -f net48 -p:Platform=x64
+        run: msbuild ./UEAESKeyFinder/UEAESKeyFinder.csproj -c Release -f net48 -p:Platform=x64
 
       # ── Win 10 / 11 ── net481 ────────────────────────────────────────────────
       - name: Build net481 x86 (Win10/11)
-        run: dotnet build ./UEAESKeyFinder/UEAESKeyFinder.csproj -c Release -f net481 -p:Platform=x86
+        run: msbuild ./UEAESKeyFinder/UEAESKeyFinder.csproj -c Release -f net481 -p:Platform=x86
 
       - name: Build net481 x64 (Win10/11)
-        run: dotnet build ./UEAESKeyFinder/UEAESKeyFinder.csproj -c Release -f net481 -p:Platform=x64
+        run: msbuild ./UEAESKeyFinder/UEAESKeyFinder.csproj -c Release -f net481 -p:Platform=x64
 
       # ── Переименование ───────────────────────────────────────────────────────
       - name: Collect artifacts
